@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import importlib.util
+import json
 import re
 import os
 import random
@@ -22,6 +24,9 @@ _WHISPERCPP_SEGMENT_RE = re.compile(
     r"^\[(?P<start>\d{2}:\d{2}:\d{2}\.\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2}\.\d{3})\]\s*(?P<text>.*)$"
 )
 _WHISPERCPP_LANG_RE = re.compile(r"\blang\s*=\s*([a-z]{2,8})\b", re.IGNORECASE)
+_WHISPERCPP_SPECIAL_TOKEN_RE = re.compile(r"^\[[^\]]+\]$")
+
+_PYANNOTE_PIPELINE_CACHE: dict[str, Any] = {}
 
 
 def _parse_hms_ms(value: str) -> int:
@@ -175,12 +180,125 @@ def _parse_whispercpp_detected_language(stdout: str, stderr: str, fallback: str)
     return fallback
 
 
+def _python_module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
+
+def _parse_whispercpp_json_output(json_path: Path, include_words: bool) -> tuple[list[TranscriptSegment], str]:
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    language = (
+        payload.get("result", {}).get("language")
+        or payload.get("params", {}).get("language")
+        or "unknown"
+    )
+    segments: list[TranscriptSegment] = []
+    for index, raw_seg in enumerate(payload.get("transcription", []) or [], start=1):
+        offsets = raw_seg.get("offsets") or {}
+        start_ms = int(offsets.get("from", 0) or 0)
+        end_ms = int(offsets.get("to", 0) or 0)
+        text = str(raw_seg.get("text") or "").strip()
+        if not text:
+            continue
+
+        words: list[WordToken] | None = None
+        token_probs: list[float] = []
+        if include_words:
+            parsed_words: list[WordToken] = []
+            for token in raw_seg.get("tokens") or []:
+                token_text_raw = str(token.get("text") or "")
+                token_text = token_text_raw.strip()
+                if not token_text or _WHISPERCPP_SPECIAL_TOKEN_RE.match(token_text):
+                    continue
+                token_offsets = token.get("offsets") or {}
+                start = token_offsets.get("from")
+                end = token_offsets.get("to")
+                if start is None or end is None:
+                    continue
+                probability_raw = token.get("p")
+                probability = float(probability_raw) if isinstance(probability_raw, (int, float)) else None
+                if probability is not None:
+                    token_probs.append(probability)
+                parsed_words.append(
+                    WordToken(
+                        startMs=int(start),
+                        endMs=int(end),
+                        text=token_text,
+                        probability=probability,
+                    )
+                )
+            words = parsed_words or None
+
+        confidence = (sum(token_probs) / len(token_probs)) if token_probs else None
+        segments.append(
+            TranscriptSegment(
+                id=f"seg_{index}",
+                startMs=start_ms,
+                endMs=end_ms,
+                speakerId=None,
+                text=text,
+                confidence=confidence,
+                words=words,
+            )
+        )
+    return segments, str(language).lower()
+
+
 def _looks_like_whispercpp_metal_alloc_error(stderr: str, stdout: str) -> bool:
     haystack = "\n".join([stderr or "", stdout or ""]).lower()
     return (
         "ggml_metal_buffer_init: error" in haystack
         or ("metal" in haystack and "failed to allocate buffer" in haystack)
     )
+
+
+def _resolve_whispercpp_threads(profile: str) -> int:
+    raw = os.environ.get("FREEWHISPR_WHISPERCPP_THREADS") or os.environ.get("WHISPERCPP_THREADS")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return max(1, min(value, 64))
+        except ValueError:
+            pass
+    cpu_count = os.cpu_count() or 8
+    if profile == "fast":
+        return min(max(cpu_count - 2, 2), 12)
+    return min(max(cpu_count - 1, 2), 16)
+
+
+def _resolve_whispercpp_decode_params(profile: str) -> tuple[int, int]:
+    if profile == "fast":
+        beam_default, best_default = 1, 1
+    else:
+        beam_default, best_default = 5, 5
+
+    def _env_int(name: str, fallback: int) -> int:
+        raw = os.environ.get(name)
+        if not raw:
+            return fallback
+        try:
+            return max(1, min(int(raw), 32))
+        except ValueError:
+            return fallback
+
+    return (
+        _env_int("FREEWHISPR_WHISPERCPP_BEAM_SIZE", beam_default),
+        _env_int("FREEWHISPR_WHISPERCPP_BEST_OF", best_default),
+    )
+
+
+def _get_pyannote_pipeline(token: str):
+    cache_key = "pyannote/speaker-diarization-community-1"
+    cached = _PYANNOTE_PIPELINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    from pyannote.audio import Pipeline  # type: ignore
+    pipe = Pipeline.from_pretrained(cache_key, token=token)
+    _PYANNOTE_PIPELINE_CACHE[cache_key] = pipe
+    return pipe
 
 
 def _read_wav_duration_ms(path: Path) -> int | None:
@@ -276,11 +394,9 @@ class ProcessingPipeline:
             whispercpp_fast_model_ok = _resolve_whispercpp_model_path("turbo") is not None
             whispercpp_best_model_ok = _resolve_whispercpp_model_path("large-v3") is not None
         whispercpp_ok = whispercpp_binary_ok and (whispercpp_fast_model_ok or whispercpp_best_model_ok)
-        try:
-            import pyannote.audio  # type: ignore # noqa: F401
-
+        if _python_module_available("pyannote.audio"):
             pyannote_ok = True
-        except Exception:
+        else:
             missing.append("pyannote.audio")
         if not whispercpp_binary_ok:
             missing.append("whisper.cpp")
@@ -339,11 +455,6 @@ class ProcessingPipeline:
         if not audio_path.exists():
             raise RuntimeError(f"INPUT_AUDIO_NOT_FOUND:{audio_path}")
 
-        # Initial integration keeps audio requirements strict to avoid hidden conversions.
-        # whisper.cpp is happiest with WAV input; the app's recorder already produces WAV.
-        if audio_path.suffix.lower() != ".wav":
-            raise RuntimeError("WHISPERCPP_WAV_REQUIRED")
-
         base_cmd = [
             str(binary),
             "-m", str(model_path),
@@ -351,10 +462,21 @@ class ProcessingPipeline:
         ]
         if request.languageMode and request.languageMode != "auto":
             base_cmd.extend(["-l", request.languageMode])
-        # Conservative thread defaults; can be tuned later.
-        cpu_count = os.cpu_count() or 8
-        threads = min(max(cpu_count - 2, 2), 12)
+        threads = _resolve_whispercpp_threads(request.profile)
         base_cmd.extend(["-t", str(threads)])
+        beam_size, best_of = _resolve_whispercpp_decode_params(request.profile)
+        base_cmd.extend(["-bs", str(beam_size), "-bo", str(best_of)])
+
+        processing_dir = Path(request.outputDir) / "processing"
+        processing_dir.mkdir(parents=True, exist_ok=True)
+        json_prefix = processing_dir / f"whispercpp-{request.jobId}"
+        json_output_path = json_prefix.with_suffix(".json")
+        try:
+            if json_output_path.exists():
+                json_output_path.unlink()
+        except Exception:
+            pass
+        base_cmd.extend(["-oj", "-ojf", "-of", str(json_prefix)])
 
         force_no_gpu = os.environ.get("FREEWHISPR_WHISPERCPP_NO_GPU", "0") == "1"
 
@@ -384,22 +506,40 @@ class ProcessingPipeline:
                 + (run.stderr.strip() or run.stdout.strip() or f"exit={run.returncode}")
             )
 
-        segments = _parse_whispercpp_segments(run.stdout)
+        fallback_lang = request.languageMode if request.languageMode != "auto" else "unknown"
+        detected_lang = fallback_lang
+        segments: list[TranscriptSegment] = []
+        json_parse_fallback = False
+        if json_output_path.exists():
+            try:
+                segments, detected_lang = _parse_whispercpp_json_output(
+                    json_output_path,
+                    include_words=request.wordTimestamps,
+                )
+            except Exception:
+                json_parse_fallback = True
+
+        if not segments:
+            segments = _parse_whispercpp_segments(run.stdout)
+            detected_lang = _parse_whispercpp_detected_language(run.stdout, run.stderr, fallback=fallback_lang)
+
         if not segments:
             raise RuntimeError("WHISPERCPP_PARSE_FAILED")
 
-        fallback_lang = request.languageMode if request.languageMode != "auto" else "unknown"
-        detected_lang = _parse_whispercpp_detected_language(run.stdout, run.stderr, fallback=fallback_lang)
         backend = BackendInfo(
             name="whisper.cpp",
             model=model_path.name,
             metadata={
                 "binary": binary.name,
                 "threads": str(threads),
-                "wordTimestamps": "false",
+                "beamSize": str(beam_size),
+                "bestOf": str(best_of),
+                "wordTimestamps": "true" if request.wordTimestamps else "false",
+                "parser": "stdout" if json_parse_fallback else "json",
                 "gpuRequested": "true" if requested_gpu else "false",
                 "gpuUsed": "true" if used_gpu else "false",
                 "gpuFallbackToCpu": "true" if (requested_gpu and not used_gpu) else "false",
+                "inputExt": audio_path.suffix.lower().lstrip(".") or "unknown",
             },
         )
         return segments, detected_lang, backend
@@ -408,12 +548,12 @@ class ProcessingPipeline:
         token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
         if not token:
             raise RuntimeError("DIARIZATION_AUTH_REQUIRED")
+        if not _python_module_available("pyannote.audio"):
+            raise RuntimeError("MISSING_PYANNOTE:module_not_found")
         try:
-            from pyannote.audio import Pipeline  # type: ignore
+            pipe = _get_pyannote_pipeline(token)
         except Exception as exc:
             raise RuntimeError(f"MISSING_PYANNOTE:{exc}") from exc
-
-        pipe = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", token=token)
         kwargs: dict[str, Any] = {}
         if request.speakerHints:
             if "min" in request.speakerHints:
@@ -485,6 +625,7 @@ class ProcessingPipeline:
         start = time.perf_counter()
         stage_times: dict[str, float] = {}
         warnings: list[str] = []
+        transcript_dir = Path(request.outputDir) / "transcript"
 
         def timed(stage_name: str, fn: Callable[[], Any]) -> Any:
             stage_start = time.perf_counter()
@@ -511,11 +652,28 @@ class ProcessingPipeline:
                 turns: list[SpeakerTurn] = []
                 diar_backend = None
                 if request.diarizationEnabled:
+                    emit("reconciling", 0.58, "Preparing transcript preview")
+                    self._check_cancel()
+                    interim_document = timed(
+                        "reconciling_preview",
+                        lambda: build_transcript_document(
+                            session_id=request.sessionId,
+                            segments=segments,
+                            turns=[],
+                            detected_language=detected_language,
+                            asr_backend=asr_backend,
+                            diar_backend=None,
+                        ),
+                    )
+                    timed("preview_exports", lambda: write_exports(interim_document, transcript_dir))
+                    emit("diarizing", 0.6, "Transcript ready — continuing speaker separation")
                     emit("diarizing", 0.62, "Loading diarization model")
                     self._check_cancel()
                     turns, diar_backend = timed("diarizing", lambda: self._real_diarize(request))
                     emit("diarizing", 0.8, "Speaker diarization complete")
                     self._check_cancel()
+                elif request.diarizationEnabled is False:
+                    emit("reconciling", 0.7, "Building transcript")
                 emit("reconciling", 0.86, "Merging speaker labels")
                 self._check_cancel()
                 document = timed(
@@ -531,7 +689,6 @@ class ProcessingPipeline:
                 )
                 result = {"document": document}
 
-            transcript_dir = Path(request.outputDir) / "transcript"
             emit("writing_output", 0.94, "Writing transcript files")
             export_paths = timed("exports", lambda: write_exports(result["document"], transcript_dir))
             metrics = {
@@ -539,12 +696,23 @@ class ProcessingPipeline:
                 "jobId": request.jobId,
                 "sessionId": request.sessionId,
                 "profile": request.profile,
+                "asrBackend": request.asrBackend,
                 "asrModel": request.asrModel,
                 "languageMode": request.languageMode,
+                "diarizationEnabled": request.diarizationEnabled,
+                "inputAudioExtension": Path(request.audioPath).suffix.lower(),
                 "stageDurationsSec": stage_times,
                 "totalDurationSec": round(time.perf_counter() - start, 4),
                 "warnings": warnings,
             }
+            document = result["document"]
+            if getattr(document, "transcriptionBackend", None):
+                metrics["transcriptionBackend"] = document.transcriptionBackend.to_dict()
+                metadata = document.transcriptionBackend.metadata or {}
+                if str(metadata.get("gpuFallbackToCpu", "")).lower() == "true":
+                    warnings.append("whisper.cpp fell back from GPU to CPU due to a Metal allocation failure")
+            if getattr(document, "diarizationBackend", None):
+                metrics["diarizationBackend"] = document.diarizationBackend.to_dict()
             return {
                 "status": "completed",
                 "document": result["document"],
@@ -569,12 +737,6 @@ class ProcessingPipeline:
                 raise WorkerExecutionError(
                     "MODEL_NOT_INSTALLED",
                     f"whisper.cpp model file for '{requested}' was not found",
-                    {"raw": msg},
-                )
-            if msg == "WHISPERCPP_WAV_REQUIRED":
-                raise WorkerExecutionError(
-                    "UNSUPPORTED_AUDIO_FORMAT",
-                    "whisper.cpp backend currently requires WAV input for FreeWhispr v1 integration",
                     {"raw": msg},
                 )
             if msg.startswith("WHISPERCPP_EXEC_FAILED:"):

@@ -707,13 +707,20 @@ private struct StageRow: View {
 private struct TranscriptStageView: View {
     @ObservedObject var viewModel: AppViewModel
 
+    private var isBackgroundProcessing: Bool {
+        guard let manifest = viewModel.selectedManifest else { return false }
+        return manifest.processingState == .running || manifest.processingState == .queued
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             topBar
             if let transcript = viewModel.currentTranscript {
                 transcriptHeader(transcript)
                 speakerRenameStrip(transcript)
+                    .disabled(isBackgroundProcessing)
                 segmentList(transcript)
+                    .disabled(isBackgroundProcessing)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Transcript not available yet")
@@ -759,6 +766,11 @@ private struct TranscriptStageView: View {
                     .foregroundStyle(viewModel.transcriptSaveStateIsError ? DS.ColorToken.fgPrimary : DS.ColorToken.fgSecondary)
             }
             Spacer()
+            if isBackgroundProcessing {
+                Text("Speaker separation is still running. Transcript is read-only until processing finishes.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+            }
             if let manifest = viewModel.selectedManifest {
                 HStack(spacing: 8) {
                     Button("Rename Session…") { viewModel.promptRenameSession(manifest) }
@@ -773,10 +785,12 @@ private struct TranscriptStageView: View {
                 Button("Save") { viewModel.saveCurrentTranscriptNow() }
                     .dsSecondaryButton()
                     .keyboardShortcut("s", modifiers: [.command])
+                    .disabled(isBackgroundProcessing)
                 Button("Export…") { viewModel.exportCurrentTranscript() }
                     .dsProminentButton()
                     .tint(.black)
                     .keyboardShortcut("e", modifiers: [.command])
+                    .disabled(isBackgroundProcessing)
             }
 
             if viewModel.selectedSessionID != nil || viewModel.selectedManifest != nil {
@@ -819,11 +833,64 @@ private struct TranscriptStageView: View {
                 .pickerStyle(.menu)
                 .frame(width: 180)
             }
+
+            if let asrLine = asrTelemetryLine(transcript), let diarLine = diarizationTelemetryLine(transcript) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(asrLine)
+                    Text(diarLine)
+                }
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
+            } else if let asrLine = asrTelemetryLine(transcript) {
+                Text(asrLine)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+            } else if let diarLine = diarizationTelemetryLine(transcript) {
+                Text(diarLine)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+            }
         }
         .padding(16)
         .background(DS.ColorToken.bgPanel)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
+    }
+
+    private func asrTelemetryLine(_ transcript: TranscriptDocument) -> String? {
+        guard let backend = transcript.transcriptionBackend else { return nil }
+        var parts: [String] = ["ASR \(backend.name)"]
+        if let model = backend.model, !model.isEmpty {
+            parts.append(model)
+        }
+        if let metadata = backend.metadata {
+            if let parser = metadata["parser"] {
+                parts.append("parser:\(parser)")
+            }
+            if let threads = metadata["threads"] {
+                parts.append("t:\(threads)")
+            }
+            if metadata["gpuFallbackToCpu"] == "true" {
+                parts.append("GPU→CPU fallback")
+            } else if metadata["gpuUsed"] == "true" {
+                parts.append("GPU")
+            } else if metadata["gpuRequested"] == "false" {
+                parts.append("CPU")
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func diarizationTelemetryLine(_ transcript: TranscriptDocument) -> String? {
+        guard let backend = transcript.diarizationBackend else { return nil }
+        var parts: [String] = ["DIAR \(backend.name)"]
+        if let model = backend.model, !model.isEmpty {
+            parts.append(model)
+        }
+        if let variant = backend.metadata?["variant"], !variant.isEmpty {
+            parts.append("variant:\(variant)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func speakerRenameStrip(_ transcript: TranscriptDocument) -> some View {

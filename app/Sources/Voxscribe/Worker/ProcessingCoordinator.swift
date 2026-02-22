@@ -63,6 +63,35 @@ enum ProcessingCoordinatorError: LocalizedError {
 }
 
 actor ProcessingCoordinator {
+    private struct WorkerSessionSignature: Equatable {
+        let projectRootPath: String
+        let workerScriptPath: String
+        let pythonExecutablePath: String
+        let diarizationToken: String?
+    }
+
+    private final class WorkerSession: @unchecked Sendable {
+        let process: Process
+        let stdin: FileHandle
+        let stdout: FileHandle
+        let stderrBuffer: StderrBuffer
+        let signature: WorkerSessionSignature
+
+        init(
+            process: Process,
+            stdin: FileHandle,
+            stdout: FileHandle,
+            stderrBuffer: StderrBuffer,
+            signature: WorkerSessionSignature
+        ) {
+            self.process = process
+            self.stdin = stdin
+            self.stdout = stdout
+            self.stderrBuffer = stderrBuffer
+            self.signature = signature
+        }
+    }
+
     private final class StderrBuffer: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
@@ -81,10 +110,14 @@ actor ProcessingCoordinator {
     }
 
     private var activeProcess: Process?
+    private var workerSession: WorkerSession?
+    private var commandInFlight = false
+    private var commandWaiters: [CheckedContinuation<Void, Never>] = []
 
     func cancelCurrentJob() {
         activeProcess?.terminate()
         activeProcess = nil
+        teardownWorkerSession()
     }
 
     func validateSetup(projectRoot: URL) async throws -> WorkerSetupStatus {
@@ -174,35 +207,21 @@ actor ProcessingCoordinator {
         workerScriptPath: String?,
         onProgress: (@Sendable (ProcessingProgressEvent) -> Void)?
     ) async throws -> [String: Any] {
+        await acquireCommandSlot()
+        defer { releaseCommandSlot() }
+
         let workerURL = resolveWorkerScript(projectRoot: projectRoot, workerScriptPathOverride: workerScriptPath)
         guard FileManager.default.fileExists(atPath: workerURL.path) else {
             throw ProcessingCoordinatorError.workerNotFound(workerURL)
         }
-
-        let process = Process()
-        process.currentDirectoryURL = projectRoot
-        process.executableURL = resolvePythonExecutable(projectRoot: projectRoot)
-        process.arguments = [workerURL.path]
-        process.environment = configuredEnvironment(diarizationToken: diarizationToken)
-
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        let stderrBuffer = StderrBuffer()
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
-            stderrBuffer.append(chunk)
-        }
-        defer {
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-        }
+        let pythonExecutable = resolvePythonExecutable(projectRoot: projectRoot)
+        let session = try ensureWorkerSession(
+            projectRoot: projectRoot,
+            workerURL: workerURL,
+            pythonExecutable: pythonExecutable,
+            diarizationToken: diarizationToken
+        )
+        let process = session.process
 
         let requestId = UUID().uuidString
         var request: [String: Any] = [
@@ -219,17 +238,14 @@ actor ProcessingCoordinator {
         var finalResponse: [String: Any]?
         var workerError: ProcessingCoordinatorError?
         var parsingError: Error?
-
-        try process.run()
         activeProcess = process
 
         let requestData = try JSONSerialization.data(withJSONObject: request, options: [])
-        stdinPipe.fileHandleForWriting.write(requestData)
-        stdinPipe.fileHandleForWriting.write(Data([0x0A]))
-        stdinPipe.fileHandleForWriting.closeFile()
+        session.stdin.write(requestData)
+        session.stdin.write(Data([0x0A]))
 
         do {
-            for try await line in stdoutPipe.fileHandleForReading.bytes.lines {
+            for try await line in session.stdout.bytes.lines {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
                 // Some ML dependencies print progress/warnings to stdout. Ignore any non-JSON protocol lines.
@@ -276,32 +292,123 @@ actor ProcessingCoordinator {
                         continue
                     }
                     finalResponse = raw
+                    break
                 }
             }
         } catch {
             parsingError = error
         }
-
-        while process.isRunning {
-            try await Task.sleep(for: .milliseconds(20))
-        }
         activeProcess = nil
 
         if let parsingError {
+            teardownWorkerSession()
             throw ProcessingCoordinatorError.workerLaunchFailed("stdout parse error: \(parsingError.localizedDescription)")
         }
         if let workerError {
+            if !process.isRunning {
+                teardownWorkerSession()
+            }
             throw workerError
         }
         if let finalResponse {
             return finalResponse
         }
 
-        let stderrText = stderrBuffer.text()
+        let stderrText = session.stderrBuffer.text()
         if process.terminationReason == .uncaughtSignal || process.terminationStatus != 0 {
+            teardownWorkerSession()
             throw ProcessingCoordinatorError.workerLaunchFailed(stderrText.isEmpty ? "Worker exited with code \(process.terminationStatus)" : stderrText)
         }
+        teardownWorkerSession()
         throw ProcessingCoordinatorError.invalidWorkerMessage
+    }
+
+    private func acquireCommandSlot() async {
+        if !commandInFlight {
+            commandInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            commandWaiters.append(continuation)
+        }
+    }
+
+    private func releaseCommandSlot() {
+        if let next = commandWaiters.first {
+            commandWaiters.removeFirst()
+            next.resume()
+        } else {
+            commandInFlight = false
+        }
+    }
+
+    private func ensureWorkerSession(
+        projectRoot: URL,
+        workerURL: URL,
+        pythonExecutable: URL,
+        diarizationToken: String?
+    ) throws -> WorkerSession {
+        let signature = WorkerSessionSignature(
+            projectRootPath: projectRoot.path,
+            workerScriptPath: workerURL.path,
+            pythonExecutablePath: pythonExecutable.path,
+            diarizationToken: diarizationToken?.isEmpty == true ? nil : diarizationToken
+        )
+
+        if let existing = workerSession, existing.process.isRunning, existing.signature == signature {
+            return existing
+        }
+
+        teardownWorkerSession()
+
+        let process = Process()
+        process.currentDirectoryURL = projectRoot
+        process.executableURL = pythonExecutable
+        process.arguments = [workerURL.path]
+        process.environment = configuredEnvironment(diarizationToken: diarizationToken)
+
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        let stderrBuffer = StderrBuffer()
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            stderrBuffer.append(chunk)
+        }
+
+        do {
+            try process.run()
+        } catch {
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            throw error
+        }
+
+        let session = WorkerSession(
+            process: process,
+            stdin: stdinPipe.fileHandleForWriting,
+            stdout: stdoutPipe.fileHandleForReading,
+            stderrBuffer: stderrBuffer,
+            signature: signature
+        )
+        workerSession = session
+        return session
+    }
+
+    private func teardownWorkerSession() {
+        guard let session = workerSession else { return }
+        session.stdout.readabilityHandler = nil
+        if session.process.isRunning {
+            session.process.terminate()
+        }
+        workerSession = nil
     }
 
     private func resolveWorkerScript(projectRoot: URL, workerScriptPathOverride: String?) -> URL {
@@ -357,10 +464,17 @@ actor ProcessingCoordinator {
         try? FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true, attributes: nil)
         let matplotlibDir = cacheRoot.appendingPathComponent("matplotlib", isDirectory: true)
         let xdgCacheDir = cacheRoot.appendingPathComponent("xdg-cache", isDirectory: true)
+        let huggingFaceDir = cacheRoot.appendingPathComponent("huggingface", isDirectory: true)
+        let torchDir = cacheRoot.appendingPathComponent("torch", isDirectory: true)
         try? FileManager.default.createDirectory(at: matplotlibDir, withIntermediateDirectories: true, attributes: nil)
         try? FileManager.default.createDirectory(at: xdgCacheDir, withIntermediateDirectories: true, attributes: nil)
+        try? FileManager.default.createDirectory(at: huggingFaceDir, withIntermediateDirectories: true, attributes: nil)
+        try? FileManager.default.createDirectory(at: torchDir, withIntermediateDirectories: true, attributes: nil)
         env["MPLCONFIGDIR"] = matplotlibDir.path
         env["XDG_CACHE_HOME"] = xdgCacheDir.path
+        env["HF_HOME"] = huggingFaceDir.path
+        env["HUGGINGFACE_HUB_CACHE"] = huggingFaceDir.appendingPathComponent("hub", isDirectory: true).path
+        env["TORCH_HOME"] = torchDir.path
         if let diarizationToken, !diarizationToken.isEmpty {
             env["HF_TOKEN"] = diarizationToken
             env["HUGGINGFACE_HUB_TOKEN"] = diarizationToken

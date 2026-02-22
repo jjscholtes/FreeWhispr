@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -85,6 +86,7 @@ final class AppViewModel: ObservableObject {
     private var hasBootstrapped = false
     private var processingTask: Task<Void, Never>?
     private var deferredSpeakerRenamePersistTask: Task<Void, Never>?
+    private var interimTranscriptShownForSessions = Set<UUID>()
     private static let lastExportFolderDefaultsKey = "voxscribe.lastExportFolderPath"
 
     init() {
@@ -318,7 +320,7 @@ final class AppViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "webm"]
+        panel.allowedContentTypes = [.audio, .movie]
 
         guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
 
@@ -326,7 +328,7 @@ final class AppViewModel: ObservableObject {
             do {
                 var manifest = try await sessionStore.createDraftSession(settings: settings)
                 let importedRelativePath = try await sessionStore.importAudioFile(from: sourceURL, into: manifest.id)
-                let durationMs = importedAudioDurationMs(for: sourceURL) ?? 0
+                let durationMs = await importedAudioDurationMs(for: sourceURL) ?? 0
                 let importedTitle = defaultImportedSessionTitle(from: sourceURL)
 
                 manifest = try await mutateManifest(sessionId: manifest.id) {
@@ -408,12 +410,14 @@ final class AppViewModel: ObservableObject {
         processingProgress = nil
         errorMessage = nil
         errorTechnicalDetails = nil
+        interimTranscriptShownForSessions.remove(sessionId)
 
         processingTask = Task { @MainActor in
             do {
                 let manifest = try await sessionStore.loadManifest(sessionId: sessionId)
                 let audioURL = await sessionStore.audioFileURL(for: manifest)
                 let outputDir = await sessionStore.sessionDirectory(for: sessionId)
+                let expectsDiarization = manifest.modelConfig.diarizationEnabled
 
                 _ = try await mutateManifest(sessionId: sessionId) {
                     $0.processingState = .running
@@ -444,6 +448,11 @@ final class AppViewModel: ObservableObject {
                                 await self.reloadSessions()
                             } catch {
                                 self.showError(error.localizedDescription)
+                            }
+                            if expectsDiarization,
+                               self.shouldTryPresentInterimTranscript(for: sessionId, from: event)
+                            {
+                                await self.presentInterimTranscriptIfAvailable(sessionId: sessionId)
                             }
                         }
                     }
@@ -479,6 +488,7 @@ final class AppViewModel: ObservableObject {
 
     private func markProcessingFailure(sessionId: UUID, code: String, message: String) async {
         let presentation = presentProcessingError(code: code, message: message)
+        let fallbackTranscript = try? await sessionStore.loadTranscript(sessionId: sessionId)
         do {
             let state: ProcessingState = (code == "JOB_CANCELLED") ? .cancelled : .failed
             _ = try await mutateManifest(sessionId: sessionId) {
@@ -498,11 +508,18 @@ final class AppViewModel: ObservableObject {
         if code == "JOB_CANCELLED" {
             showInfo("Processing cancelled.")
         } else {
-            // Processing failures are already rendered in the processing panel; avoid duplicate top-banner noise.
-            errorMessage = nil
-            errorTechnicalDetails = nil
+            if let transcript = fallbackTranscript {
+                currentTranscript = transcript
+                transcriptSaveState = .saved(Date())
+                errorMessage = presentation.message
+                errorTechnicalDetails = presentation.technicalDetails
+            } else {
+                // Processing failures are already rendered in the processing panel; avoid duplicate top-banner noise.
+                errorMessage = nil
+                errorTechnicalDetails = nil
+            }
         }
-        self.stage = .processing(sessionId)
+        self.stage = (fallbackTranscript != nil && code != "JOB_CANCELLED") ? .transcript(sessionId) : .processing(sessionId)
     }
 
     func cancelProcessing() {
@@ -534,7 +551,11 @@ final class AppViewModel: ObservableObject {
             case .running, .queued, .failed, .cancelled:
                 currentTranscript = (try? await sessionStore.loadTranscript(sessionId: sessionId))
                 transcriptSaveState = .idle
-                stage = .processing(sessionId)
+                if manifest.processingState == .running, currentTranscript != nil {
+                    stage = .transcript(sessionId)
+                } else {
+                    stage = .processing(sessionId)
+                }
             case .notStarted:
                 currentTranscript = (try? await sessionStore.loadTranscript(sessionId: sessionId))
                 transcriptSaveState = .idle
@@ -973,6 +994,26 @@ final class AppViewModel: ObservableObject {
         return "\(sanitizedTitle)-\(timestamp)"
     }
 
+    private func shouldTryPresentInterimTranscript(for sessionId: UUID, from event: ProcessingProgressEvent) -> Bool {
+        guard !interimTranscriptShownForSessions.contains(sessionId) else { return false }
+        guard case .processing(let activeSessionId) = stage, activeSessionId == sessionId else { return false }
+        if event.message.localizedCaseInsensitiveContains("Transcript ready") {
+            return true
+        }
+        return event.stage == .diarizing || event.stage == .reconciling
+    }
+
+    private func presentInterimTranscriptIfAvailable(sessionId: UUID) async {
+        guard !interimTranscriptShownForSessions.contains(sessionId) else { return }
+        guard let transcript = try? await sessionStore.loadTranscript(sessionId: sessionId) else { return }
+        interimTranscriptShownForSessions.insert(sessionId)
+        selectedSessionID = sessionId
+        currentTranscript = transcript
+        transcriptSaveState = .idle
+        stage = .transcript(sessionId)
+        showInfo("Transcript ready. Speaker separation is still running…")
+    }
+
     private func sanitizeFilename(_ value: String) -> String {
         let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>")
         let parts = value.components(separatedBy: invalid)
@@ -997,9 +1038,15 @@ final class AppViewModel: ObservableObject {
         return "Imported \(formatter.string(from: Date()))"
     }
 
-    private func importedAudioDurationMs(for sourceURL: URL) -> Int? {
+    private func importedAudioDurationMs(for sourceURL: URL) async -> Int? {
         let asset = AVURLAsset(url: sourceURL)
-        let seconds = CMTimeGetSeconds(asset.duration)
+        let duration: CMTime
+        do {
+            duration = try await asset.load(.duration)
+        } catch {
+            return nil
+        }
+        let seconds = CMTimeGetSeconds(duration)
         guard seconds.isFinite, seconds > 0 else { return nil }
         return Int((seconds * 1000).rounded())
     }
