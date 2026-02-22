@@ -8,6 +8,7 @@ struct VoxscribeApp: App {
         WindowGroup {
             AppShellView(viewModel: viewModel)
                 .frame(minWidth: 1100, minHeight: 720)
+                .preferredColorScheme(.light)
                 .task {
                     await viewModel.bootstrapIfNeeded()
                 }
@@ -15,4 +16,3 @@ struct VoxscribeApp: App {
         .windowResizability(.contentMinSize)
     }
 }
-

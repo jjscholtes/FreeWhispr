@@ -11,6 +11,13 @@ struct TranscriptSegmentRowView: View {
     @State private var lastCommittedText: String = ""
     @FocusState private var isFocused: Bool
 
+    struct SpeakerPresentation {
+        let badgeLabel: String
+        let badgeStyleIndex: Int
+        let title: String
+        let subtitle: String
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Text(TranscriptExporter.formatHumanTimestamp(segment.startMs))
@@ -21,28 +28,23 @@ struct TranscriptSegmentRowView: View {
 
             Menu {
                 Button("Assign to Unassigned") { onAssignSpeaker(nil) }
-                Divider()
-                ForEach(speakerOptions, id: \.id) { option in
-                    Button("Assign to \(option.label)") { onAssignSpeaker(option.id) }
+                if !speakerOptions.isEmpty {
+                    Divider()
+                    ForEach(speakerOptions, id: \.id) { option in
+                        Button("Assign to \(option.label)") { onAssignSpeaker(option.id) }
+                    }
+                } else {
+                    Divider()
+                    Button("No speakers available") {}
+                        .disabled(true)
                 }
             } label: {
-                HStack(alignment: .top, spacing: 6) {
-                    SpeakerBadgeView(label: badgeLabel, styleIndex: badgeStyleIndex)
-                        .padding(.top, 1)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Speaker")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(DS.ColorToken.fgSecondary)
-                        Text(speakerDisplayLabel)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(DS.ColorToken.fgPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                SpeakerAssignmentControlLabel(presentation: speakerPresentation)
             }
             .menuStyle(.borderlessButton)
-            .frame(minWidth: 230, idealWidth: 270, maxWidth: 320, alignment: .leading)
+            .menuIndicator(.hidden)
+            .frame(minWidth: 240, idealWidth: 290, maxWidth: 360, alignment: .leading)
+            .layoutPriority(1)
             .padding(.top, 4)
             .help("Assign a speaker to this transcript segment.")
 
@@ -100,25 +102,32 @@ struct TranscriptSegmentRowView: View {
         )
     }
 
-    private var badgeLabel: String {
-        guard let speakerId = segment.speakerId else { return "UN" }
-        if let speaker = transcript.speakers.first(where: { $0.id == speakerId }) {
-            if let index = transcript.speakers.firstIndex(where: { $0.id == speakerId }) {
-                return "S\(index + 1)"
-            }
-            return String(speaker.effectiveLabel.prefix(2)).uppercased()
+    private var speakerPresentation: SpeakerPresentation {
+        guard let speakerId = segment.speakerId else {
+            return SpeakerPresentation(
+                badgeLabel: "UN",
+                badgeStyleIndex: 4,
+                title: "Unassigned",
+                subtitle: "No speaker assigned"
+            )
         }
-        return "UN"
-    }
 
-    private var badgeStyleIndex: Int {
-        guard let speakerId = segment.speakerId,
-              let index = transcript.speakers.firstIndex(where: { $0.id == speakerId }) else { return 4 }
-        return index + 1
-    }
+        if let index = transcript.speakers.firstIndex(where: { $0.id == speakerId }) {
+            let speaker = transcript.speakers[index]
+            return SpeakerPresentation(
+                badgeLabel: "S\(index + 1)",
+                badgeStyleIndex: index + 1,
+                title: speaker.effectiveLabel,
+                subtitle: "Speaker S\(index + 1)"
+            )
+        }
 
-    private var speakerDisplayLabel: String {
-        transcript.speakerLabel(for: segment.speakerId)
+        return SpeakerPresentation(
+            badgeLabel: "??",
+            badgeStyleIndex: 4,
+            title: "Unknown speaker",
+            subtitle: "Missing speaker reference"
+        )
     }
 
     private func commitIfNeeded() {
@@ -127,5 +136,43 @@ struct TranscriptSegmentRowView: View {
         guard trimmedNewlineNormalized != currentNormalized else { return }
         onCommitText(draftText)
         lastCommittedText = draftText
+    }
+}
+
+private struct SpeakerAssignmentControlLabel: View {
+    let presentation: TranscriptSegmentRowView.SpeakerPresentation
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            SpeakerBadgeView(label: presentation.badgeLabel, styleIndex: presentation.badgeStyleIndex)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.ColorToken.fgPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(presentation.subtitle)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
+                .padding(.top, 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(DS.ColorToken.controlBg)
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.sm)
+                .stroke(DS.ColorToken.controlBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
     }
 }

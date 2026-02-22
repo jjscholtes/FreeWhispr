@@ -10,6 +10,15 @@ enum DS {
         static let fgTertiary = Color(red: 0.55, green: 0.55, blue: 0.55)
         static let borderSoft = Color(red: 0.867, green: 0.867, blue: 0.867)
         static let borderStrong = Color(red: 0.741, green: 0.741, blue: 0.741)
+        static let controlBg = bgPanelAlt
+        static let controlBgPressed = bgPanel
+        static let controlBorder = borderStrong
+        static let fieldBg = Color.white
+        static let fieldBorder = borderSoft
+        static let fieldText = Color.black
+        static let fieldPlaceholder = fgSecondary
+        static let chipBg = bgPanel
+        static let chipBorder = borderSoft
     }
 
     enum Radius {
@@ -81,10 +90,10 @@ extension DS {
                 .foregroundStyle(DS.ColorToken.fgPrimary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(configuration.isPressed ? DS.ColorToken.bgPanel : DS.ColorToken.bgPanelAlt)
+                .background(configuration.isPressed ? DS.ColorToken.controlBgPressed : DS.ColorToken.controlBg)
                 .overlay(
                     RoundedRectangle(cornerRadius: DS.Radius.sm)
-                        .stroke(DS.ColorToken.borderStrong, lineWidth: 1)
+                        .stroke(DS.ColorToken.controlBorder, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
         }

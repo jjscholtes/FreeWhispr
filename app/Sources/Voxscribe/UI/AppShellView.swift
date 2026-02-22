@@ -40,7 +40,7 @@ struct AppShellView: View {
             )
         ) {
             RenameSessionSheetView(viewModel: viewModel)
-                .frame(width: 460, height: 210)
+                .frame(width: 560, height: 280)
         }
         .confirmationDialog(
             "Delete recording?",
@@ -71,8 +71,11 @@ private struct SessionShelfView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Search sessions", text: $viewModel.searchQuery)
-                    .textFieldStyle(.roundedBorder)
+                SearchFieldView(
+                    title: "Search",
+                    placeholder: "Search sessions",
+                    text: $viewModel.searchQuery
+                )
 
                 Button(action: viewModel.newRecording) {
                     HStack {
@@ -229,7 +232,7 @@ private struct SessionShelfRowItem: View {
                     Button("Open") {
                         Task { await viewModel.openSession(manifest.id) }
                     }
-                    Button("Rename…") {
+                    Button("Rename Session…") {
                         viewModel.promptRenameSession(manifest)
                     }
                     Menu("Move to Folder") {
@@ -281,7 +284,7 @@ private struct SessionShelfRowItem: View {
             Button("Open") {
                 Task { await viewModel.openSession(manifest.id) }
             }
-            Button("Rename…") {
+            Button("Rename Session…") {
                 viewModel.promptRenameSession(manifest)
             }
             Menu("Move to Folder") {
@@ -754,41 +757,38 @@ private struct TranscriptStageView: View {
             }
             Spacer()
             if let manifest = viewModel.selectedManifest {
-                Button("Rename…") { viewModel.promptRenameSession(manifest) }
-                    .dsSecondaryButton()
-                Menu("Move") {
-                    Button("Unfiled") {
-                        viewModel.moveSession(manifest, toFolderId: nil)
-                    }
-                    if !viewModel.userFolders.isEmpty {
-                        Divider()
-                        ForEach(viewModel.userFolders) { folder in
-                            Button(folder.name) {
-                                viewModel.moveSession(manifest, toFolderId: folder.id)
-                            }
-                        }
-                    }
-                    Divider()
-                    Button("New Folder…") {
-                        viewModel.promptCreateFolder()
-                    }
+                HStack(spacing: 8) {
+                    Button("Rename Session…") { viewModel.promptRenameSession(manifest) }
+                        .dsSecondaryButton()
+                    MoveToFolderMenuButton(viewModel: viewModel, manifest: manifest)
                 }
-                .menuStyle(.borderlessButton)
             }
-            Button("Save") { viewModel.saveCurrentTranscriptNow() }
-                .dsSecondaryButton()
-                .keyboardShortcut("s", modifiers: [.command])
-            Button("Export…") { viewModel.exportCurrentTranscript() }
-                .dsProminentButton()
-                .tint(.black)
-                .keyboardShortcut("e", modifiers: [.command])
-            if let sessionId = viewModel.selectedSessionID {
-                Button("Reveal Files") { viewModel.revealSessionInFinder(sessionId) }
+
+            TopBarDivider()
+
+            HStack(spacing: 8) {
+                Button("Save") { viewModel.saveCurrentTranscriptNow() }
                     .dsSecondaryButton()
+                    .keyboardShortcut("s", modifiers: [.command])
+                Button("Export…") { viewModel.exportCurrentTranscript() }
+                    .dsProminentButton()
+                    .tint(.black)
+                    .keyboardShortcut("e", modifiers: [.command])
             }
-            if let manifest = viewModel.selectedManifest {
-                Button("Delete") { viewModel.promptDeleteSession(manifest) }
-                    .dsSecondaryButton()
+
+            if viewModel.selectedSessionID != nil || viewModel.selectedManifest != nil {
+                TopBarDivider()
+            }
+
+            HStack(spacing: 8) {
+                if let sessionId = viewModel.selectedSessionID {
+                    Button("Reveal Files") { viewModel.revealSessionInFinder(sessionId) }
+                        .dsSecondaryButton()
+                }
+                if let manifest = viewModel.selectedManifest {
+                    Button("Delete") { viewModel.promptDeleteSession(manifest) }
+                        .dsSecondaryButton()
+                }
             }
         }
         .frame(height: 56)
@@ -800,8 +800,11 @@ private struct TranscriptStageView: View {
                 .frame(height: 10)
 
             HStack(spacing: 12) {
-                TextField("Search transcript", text: $viewModel.transcriptSearchQuery)
-                    .textFieldStyle(.roundedBorder)
+                SearchFieldView(
+                    title: "Search",
+                    placeholder: "Search transcript",
+                    text: $viewModel.transcriptSearchQuery
+                )
 
                 Picker("Filter", selection: $viewModel.transcriptSpeakerFilter) {
                     Text("All").tag("all")
@@ -822,8 +825,8 @@ private struct TranscriptStageView: View {
 
     private func speakerRenameStrip(_ transcript: TranscriptDocument) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            CapsLabel(text: "Speakers")
-            Text("Renaming a speaker here updates all transcript rows for that speaker.")
+            CapsLabel(text: "Global Speaker Names")
+            Text("Renaming here updates all rows assigned to that speaker.")
                 .font(.system(size: 12))
                 .foregroundStyle(DS.ColorToken.fgSecondary)
             FlowLayout(spacing: 8) {
@@ -845,7 +848,10 @@ private struct TranscriptStageView: View {
     }
 
     private func segmentList(_ transcript: TranscriptDocument) -> some View {
-        ScrollView {
+        let speakerRefreshKey = transcript.speakers
+            .map { "\($0.id):\($0.effectiveLabel)" }
+            .joined(separator: "|")
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(viewModel.filteredTranscriptSegments) { segment in
                     TranscriptSegmentRowView(
@@ -859,6 +865,7 @@ private struct TranscriptStageView: View {
                             viewModel.reassignSegment(id: segment.id, speakerId: speakerId)
                         }
                     )
+                    .id("\(segment.id)-\(segment.speakerId ?? "unassigned")-\(speakerRefreshKey)")
                 }
             }
             .padding(.top, 4)
@@ -878,32 +885,45 @@ private struct SpeakerRenameChip: View {
     var body: some View {
         HStack(spacing: 8) {
             SpeakerBadgeView(label: "S\(index)", styleIndex: index)
-            TextField("Speaker \(index)", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13))
-                .foregroundColor(.primary)
-                .tint(.black)
-                .frame(width: 196)
-                .focused($isFocused)
-                .onSubmit {
-                    commitIfNeeded()
-                }
-                .onChange(of: isFocused) { _, focused in
-                    if !focused {
+            HStack(spacing: 8) {
+                TextField("Speaker \(index)", text: $name)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(DS.ColorToken.fieldText)
+                    .tint(.black)
+                    .frame(width: 220)
+                    .environment(\.colorScheme, .light)
+                    .focused($isFocused)
+                    .onSubmit {
                         commitIfNeeded()
                     }
-                }
-                .onChange(of: name) { _, _ in
-                    guard isFocused else { return }
-                    scheduleAutosave()
-                }
-            Button("Save") { commitIfNeeded() }
-                .dsSecondaryButton()
-                .controlSize(.small)
+                    .onChange(of: isFocused) { _, focused in
+                        if !focused {
+                            commitIfNeeded()
+                        }
+                    }
+                    .onChange(of: name) { _, _ in
+                        guard isFocused else { return }
+                        scheduleAutosave()
+                    }
+
+                Text(chipStatusText)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(chipStatusIsPending ? DS.ColorToken.fgPrimary : DS.ColorToken.fgSecondary)
+                    .frame(width: 64, alignment: .trailing)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(DS.ColorToken.fieldBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(isFocused ? DS.ColorToken.borderStrong : DS.ColorToken.fieldBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
         }
         .padding(8)
-        .background(DS.ColorToken.bgPanel)
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
+        .background(DS.ColorToken.chipBg)
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DS.ColorToken.chipBorder, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
         .help("Rename this speaker across the transcript.")
         .onAppear { syncFromSpeaker() }
@@ -924,8 +944,8 @@ private struct SpeakerRenameChip: View {
     private func commitIfNeeded() {
         autosaveTask?.cancel()
         autosaveTask = nil
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let current = lastCommittedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = normalizedName
+        let current = normalizedCommittedName
         guard trimmed != current else {
             name = trimmed
             return
@@ -939,6 +959,24 @@ private struct SpeakerRenameChip: View {
         let current = speaker.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         name = current
         lastCommittedName = current
+    }
+
+    private var normalizedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedCommittedName: String {
+        lastCommittedName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var chipStatusIsPending: Bool {
+        normalizedName != normalizedCommittedName
+    }
+
+    private var chipStatusText: String {
+        if chipStatusIsPending { return "Unsaved" }
+        if isFocused { return "Autosave" }
+        return "Saved"
     }
 
     private func scheduleAutosave() {
@@ -965,6 +1003,152 @@ private struct FlowLayout<Content: View>: View {
         // Simple fallback for v1: horizontal scroll keeps implementation small.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing, content: content)
+        }
+    }
+}
+
+private struct TopBarDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(DS.ColorToken.borderSoft)
+            .frame(width: 1, height: 22)
+    }
+}
+
+private struct SearchFieldView: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CapsLabel(text: title)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .foregroundColor(DS.ColorToken.fieldText)
+                if !text.isEmpty {
+                    Button {
+                        text = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(DS.ColorToken.fgTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(DS.ColorToken.fieldBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(DS.ColorToken.fieldBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+            .environment(\.colorScheme, .light)
+        }
+    }
+}
+
+private struct LabeledTextFieldCard: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    var onSubmit: () -> Void
+    var promptText: String? = nil
+    var isFocused: FocusState<Bool>.Binding?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
+
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .foregroundColor(DS.ColorToken.fieldText)
+                    .environment(\.colorScheme, .light)
+                    .onSubmit(onSubmit)
+                    .applyFocus(isFocused)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(DS.ColorToken.fieldBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(DS.ColorToken.fieldBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+
+            if let promptText {
+                Text(promptText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(DS.ColorToken.bgPanel)
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
+    }
+}
+
+private struct MoveToFolderMenuButton: View {
+    @ObservedObject var viewModel: AppViewModel
+    let manifest: SessionManifest
+
+    var body: some View {
+        Menu {
+            Button("Unfiled") {
+                viewModel.moveSession(manifest, toFolderId: nil)
+            }
+            if !viewModel.userFolders.isEmpty {
+                Divider()
+                ForEach(viewModel.userFolders) { folder in
+                    Button(folder.name) {
+                        viewModel.moveSession(manifest, toFolderId: folder.id)
+                    }
+                }
+            }
+            Divider()
+            Button("New Folder…") {
+                viewModel.promptCreateFolder()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Move to Folder")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(DS.ColorToken.fgPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(DS.ColorToken.controlBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(DS.ColorToken.controlBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        }
+        .menuStyle(.borderlessButton)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func applyFocus(_ focus: FocusState<Bool>.Binding?) -> some View {
+        if let focus {
+            self.focused(focus)
+        } else {
+            self
         }
     }
 }
@@ -1228,19 +1412,13 @@ private struct CreateFolderSheetView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(DS.ColorToken.fgSecondary)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Folder name")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(DS.ColorToken.fgSecondary)
-                TextField("e.g. Clients, Research, Interviews", text: $viewModel.createFolderDraftName)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isNameFieldFocused)
-                    .onSubmit { viewModel.confirmCreateFolder() }
-            }
-            .padding(14)
-            .background(DS.ColorToken.bgPanel)
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
+            LabeledTextFieldCard(
+                title: "Folder name",
+                placeholder: "e.g. Clients, Research, Interviews",
+                text: $viewModel.createFolderDraftName,
+                onSubmit: { viewModel.confirmCreateFolder() },
+                isFocused: $isNameFieldFocused
+            )
 
             Spacer(minLength: 0)
 
@@ -1268,6 +1446,7 @@ private struct CreateFolderSheetView: View {
 private struct RenameSessionSheetView: View {
     @ObservedObject var viewModel: AppViewModel
     @FocusState private var isNameFieldFocused: Bool
+    @State private var showDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1280,28 +1459,31 @@ private struct RenameSessionSheetView: View {
             }
 
             if let manifest = viewModel.pendingRenameSession {
-                Text("Update the session name shown in the session list and transcript header.")
+                Text("Update how this session appears in the sidebar and transcript header.")
                     .font(.system(size: 12))
                     .foregroundStyle(DS.ColorToken.fgSecondary)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Session name")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(DS.ColorToken.fgSecondary)
-                    TextField("Session name", text: $viewModel.renameSessionDraftTitle)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($isNameFieldFocused)
-                        .onSubmit { viewModel.confirmRenamePendingSession() }
+                LabeledTextFieldCard(
+                    title: "Session name",
+                    placeholder: "Session name",
+                    text: $viewModel.renameSessionDraftTitle,
+                    onSubmit: { viewModel.confirmRenamePendingSession() },
+                    isFocused: $isNameFieldFocused
+                )
+
+                DisclosureGroup(isExpanded: $showDetails) {
                     Text("Session ID: \(manifest.id.uuidString)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(DS.ColorToken.fgSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                } label: {
+                    Text("Details")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(DS.ColorToken.fgSecondary)
                 }
-                .padding(14)
-                .background(DS.ColorToken.bgPanel)
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
+                .padding(.horizontal, 2)
             }
 
             Spacer(minLength: 0)
@@ -1310,7 +1492,7 @@ private struct RenameSessionSheetView: View {
                 Button("Cancel") { viewModel.dismissRenamePrompt() }
                     .dsSecondaryButton()
                 Spacer()
-                Button("Save Name") { viewModel.confirmRenamePendingSession() }
+                Button("Rename Session") { viewModel.confirmRenamePendingSession() }
                     .dsProminentButton()
                     .tint(.black)
                     .keyboardShortcut(.defaultAction)
