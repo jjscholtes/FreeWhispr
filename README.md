@@ -16,32 +16,24 @@ FreeWhispr is a local macOS transcription app for recording or importing audio, 
 
 FreeWhispr can transcribe audio locally without extra account setup, but **speaker separation** (who said what) uses `pyannote` models hosted on Hugging Face and requires one-time access setup.
 
-### 1. Install the local worker dependencies
+### For people using the downloaded app (recommended)
 
-From the project root:
+If you installed FreeWhispr by downloading `FreeWhispr.zip` and dragging the app into `Applications`, follow these steps (no terminal needed):
 
-```bash
-./scripts/install_worker_deps.sh
-```
+### 1. Install and open FreeWhispr
 
-This creates a local Python environment (`.venv313`) and installs the worker dependencies (including `faster-whisper` and `pyannote.audio`).
+- Download `FreeWhispr.zip`
+- Unzip it
+- Drag **FreeWhispr.app** into **Applications**
+- Open **FreeWhispr**
 
-### 2. Start the app
-
-Use the packaged app or run from source:
-
-```bash
-cd app
-swift run
-```
-
-### 3. Open Settings in FreeWhispr
+### 2. Open Settings in FreeWhispr
 
 - Open **Settings**
 - Go to **Diarization Setup** / **Model Access**
 - Leave **Enable diarization by default** on (or toggle it on later per workflow)
 
-### 4. Create a Hugging Face token (one-time)
+### 3. Create a Hugging Face token (one-time)
 
 Speaker separation uses gated `pyannote` models, so you need a Hugging Face account + token.
 
@@ -49,7 +41,7 @@ Speaker separation uses gated `pyannote` models, so you need a Hugging Face acco
 - Generate an access token with **Read** access
 - Copy the token
 
-### 5. Request/accept access to the gated pyannote model (one-time)
+### 4. Request/accept access to the gated pyannote model (one-time)
 
 Open the model page and request/accept access:
 
@@ -57,7 +49,7 @@ Open the model page and request/accept access:
 
 If Hugging Face prompts for terms/approval, complete that with the **same account** that created your token.
 
-### 6. Paste the token into FreeWhispr
+### 5. Paste the token into FreeWhispr
 
 - In **Settings**, paste the token into **Hugging Face token (pyannote)**
 - Click **Save settings**
@@ -69,7 +61,7 @@ You want to see something like:
 - `pyannote: available`
 - `HF token: present`
 
-### 7. Test speaker separation
+### 6. Test speaker separation
 
 - Record or import an audio file
 - Make sure speaker separation/diarization is enabled
@@ -77,7 +69,7 @@ You want to see something like:
 
 The first run may take longer while models are downloaded/cached locally.
 
-### 8. If it fails (common fixes)
+### 7. If it fails (common fixes)
 
 **Error: `401 Cannot access gated repo ... pyannote/speaker-diarization-community-1`**
 
@@ -88,13 +80,8 @@ The first run may take longer while models are downloaded/cached locally.
 
 **Error: `faster-whisper: missing`**
 
-- Re-run:
-
-```bash
-./scripts/install_worker_deps.sh
-```
-
-- Restart the app and click **Validate setup** again
+- If you are using the packaged app, reinstall/update FreeWhispr and try **Validate setup** again
+- If you are running from source, follow the **Running FreeWhispr from source (developer setup)** section below
 
 **Transcription works, but no speaker labels**
 
@@ -106,11 +93,33 @@ The first run may take longer while models are downloaded/cached locally.
 - Check macOS permissions: **System Settings -> Privacy & Security -> Microphone**
 - Allow access for **FreeWhispr**
 
-### Notes
+### 8. Notes
 
 - The Hugging Face token is stored in the **macOS Keychain** (not in your transcript files).
 - You can still use FreeWhispr without speaker separation by disabling diarization.
 - Transcription and diarization run locally after the required models are installed and cached.
+
+### Running FreeWhispr from source (developer setup)
+
+If you are running FreeWhispr from the source repo instead of using the packaged app, install the local worker dependencies first:
+
+```bash
+./scripts/install_worker_deps.sh
+```
+
+This creates a local Python environment (`.venv313`) and installs the worker dependencies (including `faster-whisper` and `pyannote.audio`).
+
+Then start the app from source:
+
+```bash
+cd app
+swift run
+```
+
+### Developer Notes
+
+- The packaged app is the easiest way to get started.
+- The source workflow is mainly for development and debugging.
 
 ## Tests
 
