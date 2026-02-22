@@ -2,28 +2,16 @@
 
 FreeWhispr is a local macOS transcription app for recording or importing audio, generating transcripts, assigning speakers, and exporting results. It keeps the workflow simple with fast recording, searchable sessions and folders, and built-in editing tools for speaker names and transcript cleanup.
 
-## Current State
+## Current State & Technical Stack
 
-- SwiftUI macOS app with local recording + audio import, session shelf, folders, transcript editor, and export flow
-- Python worker sidecar with JSONL IPC for transcription/diarization jobs
-- Real-first local processing path (ASR via `whisper.cpp`; diarization via `pyannote`; mock path only for explicit dev overrides)
-- Speaker naming/reassignment UI, session rename, move-to-folder, and delete actions
-- Packaging scripts for bundled macOS app (`FreeWhispr.app` / `.zip`)
-- Versioned JSON contract examples and basic tests for session store, exports, reconciliation, and worker IPC
-
-## Technical Stack (Short Overview)
-
-FreeWhispr is split into a native macOS app and a local processing worker:
-
-- **macOS app (SwiftUI + AVFoundation)**: recording/import, session management, transcript editing, speaker naming, exports, and settings UI
-- **ASR (speech-to-text)**: [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) running locally (default backend), with Apple Silicon acceleration (Metal/GPU when available)
-- **Speaker separation (diarization)**: `pyannote.audio` running locally in a Python worker runtime (Hugging Face token required for gated pyannote model access)
-- **Worker protocol**: JSONL IPC between the Swift app and Python worker (progress events, setup validation, jobs, errors)
-- **Storage**: local session files in macOS Application Support (audio, transcript JSON/TXT/SRT, logs, processing metrics)
-- **Security**: Hugging Face token stored in the macOS Keychain (not in transcript/session JSON files)
-- **Packaging**: macOS `.app`, `.zip`, and `.dmg` via local packaging scripts (optional bundled Python diarization runtime, optional on-demand speaker-runtime install)
-
-This architecture keeps the UI native and responsive, while allowing the ML stack (`whisper.cpp` + `pyannote`) to evolve independently.
+- **macOS app (SwiftUI + AVFoundation)** for recording/importing audio, session folders, transcript editing, speaker naming/reassignment, and exports
+- **ASR (speech-to-text)** runs locally with [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp), including Apple Silicon acceleration (Metal/GPU and Core ML encoder support when available)
+- **Speaker separation (diarization)** runs locally with `pyannote.audio` in a Python worker runtime (Hugging Face token required for gated pyannote model access)
+- **Worker communication** uses JSONL IPC between the Swift app and the local Python worker (setup validation, progress events, jobs, errors)
+- **Storage** is local in macOS Application Support (audio, transcript JSON/TXT/SRT, logs, metrics)
+- **Security**: the Hugging Face token is stored in the macOS Keychain (not in session/transcript JSON files)
+- **Packaging** scripts build a macOS `.app`, `.zip`, and `.dmg`, with optional on-demand speaker runtime install to reduce download size
+- **Quality**: includes versioned JSON contract examples and basic tests for session store, exports, reconciliation, and worker IPC
 
 ## Speaker Recognition (Speaker Separation) Setup - Step by Step
 

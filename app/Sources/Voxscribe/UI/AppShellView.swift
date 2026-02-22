@@ -904,6 +904,15 @@ private struct TranscriptStageView: View {
                 .frame(width: 180)
             }
 
+            if let accelerationText = asrAccelerationStatusText(transcript) {
+                HStack(spacing: 8) {
+                    CapsLabel(text: "Acceleration")
+                    Text(accelerationText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DS.ColorToken.fgPrimary)
+                }
+            }
+
             if let asrLine = asrTelemetryLine(transcript), let diarLine = diarizationTelemetryLine(transcript) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(asrLine)
@@ -958,6 +967,39 @@ private struct TranscriptStageView: View {
             }
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func asrAccelerationStatusText(_ transcript: TranscriptDocument) -> String? {
+        guard let metadata = transcript.transcriptionBackend?.metadata else { return nil }
+        let coremlUsed = metadata["coremlUsed"] == "true"
+        let coremlRequested = metadata["coremlRequested"] == "true"
+        let coremlFailed = metadata["coremlLoadFailed"] == "true"
+        let gpuUsed = metadata["gpuUsed"] == "true"
+        let gpuFallback = metadata["gpuFallbackToCpu"] == "true"
+        let gpuRequested = metadata["gpuRequested"] == "true"
+
+        if coremlUsed && gpuUsed {
+            return "Core ML + GPU active"
+        }
+        if coremlUsed {
+            return "Core ML active"
+        }
+        if coremlRequested && coremlFailed && gpuUsed {
+            return "GPU active (Core ML failed)"
+        }
+        if coremlRequested && coremlFailed {
+            return "Core ML unavailable (fallback used)"
+        }
+        if gpuFallback {
+            return "CPU (GPU fallback)"
+        }
+        if gpuUsed {
+            return "GPU active"
+        }
+        if gpuRequested == false {
+            return "CPU only"
+        }
+        return nil
     }
 
     private func diarizationTelemetryLine(_ transcript: TranscriptDocument) -> String? {
