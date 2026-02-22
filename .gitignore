@@ -18,3 +18,7 @@ worker/.venv/
 tmp/
 dist/
 *.zip
+
+# Local planning / working docs
+project*.md
+testreport.md

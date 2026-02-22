@@ -14,6 +14,8 @@ RES_DIR="$CONTENTS_DIR/Resources"
 BUILD_CONFIGURATION="${VOXSCRIBE_BUILD_CONFIGURATION:-release}"
 BUILD_EXECUTABLE=""
 ZIP_PATH="$DIST_DIR/${APP_NAME}.zip"
+DMG_PATH="$DIST_DIR/${APP_NAME}.dmg"
+DMG_STAGE_DIR="$DIST_DIR/.dmg-stage-${APP_NAME}"
 SKIP_BUILD=0
 WORKER_VENV_PATH="${VOXSCRIBE_WORKER_VENV_PATH:-}"
 SIGN_IDENTITY="${VOXSCRIBE_CODESIGN_IDENTITY:-}"
@@ -181,16 +183,16 @@ else
   echo "[4/6] No worker venv specified (bundle will use system python or VOXSCRIBE_WORKER_PYTHON override)"
 fi
 
-echo "[5/6] Creating distribution zip"
+echo "[5/7] Creating distribution zip"
 rm -f "$ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP_PATH"
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
-  echo "[6/6] Codesigning app bundle with identity: $SIGN_IDENTITY"
+  echo "[6/7] Codesigning app bundle with identity: $SIGN_IDENTITY"
   codesign --force --timestamp --options runtime --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
   codesign --verify --deep --strict "$APP_BUNDLE"
 else
-  echo "[6/6] Skipping codesign (no --sign-identity provided)"
+  echo "[6/7] Skipping codesign (no --sign-identity provided)"
 fi
 
 if [[ -n "$NOTARY_PROFILE" ]]; then
@@ -203,8 +205,23 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
   xcrun stapler staple "$APP_BUNDLE"
 fi
 
+echo "[7/7] Creating distribution DMG"
+rm -f "$DMG_PATH"
+rm -rf "$DMG_STAGE_DIR"
+mkdir -p "$DMG_STAGE_DIR"
+cp -R "$APP_BUNDLE" "$DMG_STAGE_DIR/"
+ln -s /Applications "$DMG_STAGE_DIR/Applications"
+hdiutil create \
+  -volname "$APP_NAME" \
+  -srcfolder "$DMG_STAGE_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH" >/dev/null
+rm -rf "$DMG_STAGE_DIR"
+
 echo
 echo "Bundle ready: $APP_BUNDLE"
 echo "Archive:      $ZIP_PATH"
+echo "DMG:          $DMG_PATH"
 echo "Worker path in bundle: Contents/Resources/worker/voxscribe_worker.py"
 echo "Optional bundled runtime path: Contents/Resources/worker_runtime/bin/python3"
