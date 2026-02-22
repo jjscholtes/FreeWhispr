@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "00000000-0000-0000-0000-000000000001",
+  "createdAt": "2026-02-22T00:00:00Z",
+  "updatedAt": "2026-02-22T00:00:00Z",
+  "title": "Interview 2026-02-22 14:32",
+  "recordingState": "stopped",
+  "processingState": "completed",
+  "processingStage": null,
+  "durationMs": 2520000,
+  "audioFileRelativePath": "audio/source.wav",
+  "languageMode": "auto",
+  "profile": "fast",
+  "modelConfig": {
+    "asrModel": "turbo",
+    "diarizationEnabled": true
+  },
+  "speakerCountHint": null,
+  "artifactStatus": {
+    "hasTranscriptJson": true,
+    "hasTxtExport": true,
+    "hasSrtExport": true
+  },
+  "lastError": null
+}

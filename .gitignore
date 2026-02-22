@@ -1,0 +1,20 @@
+.DS_Store
+*.swp
+*.swo
+
+# Swift
+app/.build/
+app/.swiftpm/
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+.venv313/
+worker/.venv/
+*.pyc
+
+# Local app output
+tmp/
+dist/
+*.zip

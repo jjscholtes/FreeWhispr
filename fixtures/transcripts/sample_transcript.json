@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "11111111-1111-1111-1111-111111111111",
+  "createdAt": 1771718400000,
+  "updatedAt": 1771718400000,
+  "sourceLanguage": "nl",
+  "transcriptionBackend": {
+    "name": "faster-whisper-mock",
+    "model": "turbo"
+  },
+  "diarizationBackend": {
+    "name": "pyannote.audio-mock",
+    "model": "community-1-mock"
+  },
+  "speakers": [
+    {
+      "id": "spk_1",
+      "defaultLabel": "Speaker 1",
+      "displayName": "Interviewer",
+      "colorHex": "#111111",
+      "isUserEdited": true
+    },
+    {
+      "id": "spk_2",
+      "defaultLabel": "Speaker 2",
+      "displayName": "Guest",
+      "colorHex": "#111111",
+      "isUserEdited": true
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_1",
+      "startMs": 2000,
+      "endMs": 6000,
+      "speakerId": "spk_1",
+      "text": "Goedemorgen, zullen we beginnen?",
+      "confidence": 0.92,
+      "speakerConfidence": 0.98,
+      "source": "machine",
+      "words": null
+    },
+    {
+      "id": "seg_2",
+      "startMs": 6500,
+      "endMs": 11000,
+      "speakerId": "spk_2",
+      "text": "Ja, laten we de planning bespreken.",
+      "confidence": 0.88,
+      "speakerConfidence": 0.96,
+      "source": "machine",
+      "words": null
+    }
+  ],
+  "stats": {
+    "segmentCount": 2,
+    "speakerCount": 2,
+    "wordCount": 10,
+    "durationMs": 11000
+  }
+}

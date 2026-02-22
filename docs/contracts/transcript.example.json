@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "00000000-0000-0000-0000-000000000001",
+  "createdAt": 1771718400000,
+  "updatedAt": 1771718400000,
+  "sourceLanguage": "en",
+  "transcriptionBackend": {
+    "name": "faster-whisper-mock",
+    "model": "turbo"
+  },
+  "diarizationBackend": {
+    "name": "pyannote.audio-mock",
+    "model": "community-1-mock"
+  },
+  "speakers": [
+    {
+      "id": "spk_1",
+      "defaultLabel": "Speaker 1",
+      "displayName": null,
+      "colorHex": "#111111",
+      "isUserEdited": false
+    },
+    {
+      "id": "spk_2",
+      "defaultLabel": "Speaker 2",
+      "displayName": null,
+      "colorHex": "#111111",
+      "isUserEdited": false
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_1",
+      "startMs": 1000,
+      "endMs": 4600,
+      "speakerId": "spk_1",
+      "text": "Thanks for joining, let's start with the main issue.",
+      "confidence": 0.9,
+      "speakerConfidence": 1.0,
+      "source": "machine",
+      "words": [
+        {
+          "startMs": 1000,
+          "endMs": 1200,
+          "text": "Thanks",
+          "probability": 0.93,
+          "speakerId": "spk_1"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "segmentCount": 1,
+    "speakerCount": 2,
+    "wordCount": 9,
+    "durationMs": 4600
+  }
+}
