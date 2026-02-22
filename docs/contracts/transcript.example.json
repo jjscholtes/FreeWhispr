@@ -5,7 +5,7 @@
   "updatedAt": 1771718400000,
   "sourceLanguage": "en",
   "transcriptionBackend": {
-    "name": "faster-whisper-mock",
+    "name": "whisper.cpp-mock",
     "model": "turbo"
   },
   "diarizationBackend": {

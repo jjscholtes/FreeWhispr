@@ -73,15 +73,22 @@ enum ProcessingProfile: String, Codable, CaseIterable, Sendable, Identifiable {
 
 enum ASRBackend: String, Codable, CaseIterable, Sendable, Identifiable {
     case whisperCpp = "whisper.cpp"
-    case fasterWhisper = "faster-whisper"
 
     var id: String { rawValue }
 
     var label: String {
-        switch self {
-        case .fasterWhisper: return "faster-whisper"
-        case .whisperCpp: return "whisper.cpp"
-        }
+        "whisper.cpp"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        _ = try? container.decode(String.self)
+        self = .whisperCpp
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(Self.whisperCpp.rawValue)
     }
 }
 

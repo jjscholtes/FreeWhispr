@@ -2,8 +2,10 @@ import Foundation
 
 struct WorkerSetupStatus: Sendable, Equatable {
     var status: String
-    var fasterWhisperAvailable: Bool
     var whisperCppAvailable: Bool
+    var whisperCppBinaryAvailable: Bool
+    var whisperCppTurboModelAvailable: Bool
+    var whisperCppBestModelAvailable: Bool
     var pyannoteAvailable: Bool
     var diarizationTokenPresent: Bool
     var missingDependencies: [String]
@@ -106,8 +108,10 @@ actor ProcessingCoordinator {
         let dependencies = payload["dependencies"] as? [String: Any] ?? [:]
         return WorkerSetupStatus(
             status: payload["status"] as? String ?? "unknown",
-            fasterWhisperAvailable: dependencies["fasterWhisperAvailable"] as? Bool ?? false,
             whisperCppAvailable: dependencies["whisperCppAvailable"] as? Bool ?? false,
+            whisperCppBinaryAvailable: dependencies["whisperCppBinaryAvailable"] as? Bool ?? false,
+            whisperCppTurboModelAvailable: dependencies["whisperCppTurboModelAvailable"] as? Bool ?? false,
+            whisperCppBestModelAvailable: dependencies["whisperCppBestModelAvailable"] as? Bool ?? false,
             pyannoteAvailable: dependencies["pyannoteAvailable"] as? Bool ?? false,
             diarizationTokenPresent: payload["diarizationTokenPresent"] as? Bool ?? false,
             missingDependencies: payload["missingDependencies"] as? [String] ?? []

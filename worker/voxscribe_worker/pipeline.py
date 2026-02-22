@@ -266,18 +266,11 @@ class ProcessingPipeline:
             raise RuntimeError("JOB_CANCELLED")
 
     def validate_setup(self) -> dict[str, Any]:
-        faster_whisper_ok = False
         whispercpp_binary_ok = False
         whispercpp_fast_model_ok = False
         whispercpp_best_model_ok = False
         pyannote_ok = False
         missing: list[str] = []
-        try:
-            import faster_whisper  # noqa: F401
-
-            faster_whisper_ok = True
-        except Exception:
-            pass
         if _resolve_whispercpp_binary() is not None:
             whispercpp_binary_ok = True
             whispercpp_fast_model_ok = _resolve_whispercpp_model_path("turbo") is not None
@@ -289,18 +282,14 @@ class ProcessingPipeline:
             pyannote_ok = True
         except Exception:
             missing.append("pyannote.audio")
-        if not (faster_whisper_ok or whispercpp_ok):
-            if not faster_whisper_ok:
-                missing.append("faster-whisper")
-            if not whispercpp_binary_ok:
-                missing.append("whisper.cpp")
-            elif not (whispercpp_fast_model_ok or whispercpp_best_model_ok):
-                missing.append("whisper.cpp-model")
+        if not whispercpp_binary_ok:
+            missing.append("whisper.cpp")
+        elif not (whispercpp_fast_model_ok or whispercpp_best_model_ok):
+            missing.append("whisper.cpp-model")
         token_present = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN"))
         return {
             "pythonVersion": os.sys.version.split()[0],
             "dependencies": {
-                "fasterWhisperAvailable": faster_whisper_ok,
                 "whisperCppAvailable": whispercpp_ok,
                 "whisperCppBinaryAvailable": whispercpp_binary_ok,
                 "whisperCppTurboModelAvailable": whispercpp_fast_model_ok,
@@ -308,7 +297,7 @@ class ProcessingPipeline:
                 "pyannoteAvailable": pyannote_ok,
             },
             "diarizationTokenPresent": token_present,
-            "status": "ready" if (faster_whisper_ok or whispercpp_ok) else "needs_setup",
+            "status": "ready" if whispercpp_ok else "needs_setup",
             "missingDependencies": missing,
         }
 
@@ -320,7 +309,6 @@ class ProcessingPipeline:
             },
             "asrBackends": {
                 "whisper.cpp": {"description": "whisper.cpp CLI backend"},
-                "faster-whisper": {"description": "Python faster-whisper backend"},
             },
             "languages": ["auto", "nl", "en"],
             "features": {
@@ -334,56 +322,9 @@ class ProcessingPipeline:
         }
 
     def _real_transcribe(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
-        backend_name = (request.asrBackend or "whisper.cpp").strip().lower()
-        if backend_name in {"whisper.cpp", "whispercpp", "whisper-cpp"}:
-            return self._real_transcribe_whispercpp(request)
-        # Optional real backend. Falls back to a structured error if unavailable or unsupported.
-        try:
-            from faster_whisper import WhisperModel  # type: ignore
-        except Exception as exc:
-            raise RuntimeError(f"MISSING_FASTER_WHISPER:{exc}") from exc
-
-        model_name = request.asrModel
-        compute_type = "int8" if request.profile == "fast" else "int8_float16"
-        model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
-        language = None if request.languageMode == "auto" else request.languageMode
-        segments_result, info = model.transcribe(
-            request.audioPath,
-            task="transcribe",
-            language=language,
-            word_timestamps=request.wordTimestamps,
-            vad_filter=True,
-        )
-        segments: list[TranscriptSegment] = []
-        for idx, seg in enumerate(segments_result, start=1):
-            words = None
-            if getattr(seg, "words", None):
-                words = []
-                for word in seg.words:
-                    if word.start is None or word.end is None:
-                        continue
-                    words.append(
-                        WordToken(
-                            startMs=int(word.start * 1000),
-                            endMs=int(word.end * 1000),
-                            text=str(word.word).strip(),
-                            probability=getattr(word, "probability", None),
-                        )
-                    )
-            segments.append(
-                TranscriptSegment(
-                    id=f"seg_{idx}",
-                    startMs=int(seg.start * 1000),
-                    endMs=int(seg.end * 1000),
-                    speakerId=None,
-                    text=str(seg.text).strip(),
-                    confidence=getattr(seg, "avg_logprob", None),
-                    words=words,
-                )
-            )
-        detected_lang = getattr(info, "language", None) or language or "unknown"
-        backend = BackendInfo(name="faster-whisper", model=model_name)
-        return segments, detected_lang, backend
+        # `asrBackend` is still accepted in payloads for compatibility, but FreeWhispr now
+        # standardizes on whisper.cpp and routes all ASR through this backend.
+        return self._real_transcribe_whispercpp(request)
 
     def _real_transcribe_whispercpp(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
         binary = _resolve_whispercpp_binary()
@@ -615,8 +556,6 @@ class ProcessingPipeline:
             msg = str(exc)
             if msg == "JOB_CANCELLED":
                 raise
-            if msg.startswith("MISSING_FASTER_WHISPER"):
-                raise WorkerExecutionError("MODEL_NOT_INSTALLED", "faster-whisper dependency is not installed", {"raw": msg})
             if msg.startswith("MISSING_PYANNOTE"):
                 raise WorkerExecutionError("DIARIZATION_MODEL_UNAVAILABLE", "pyannote.audio dependency is not installed", {"raw": msg})
             if msg == "MISSING_WHISPERCPP_BINARY":

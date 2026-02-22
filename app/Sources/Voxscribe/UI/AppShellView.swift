@@ -1231,10 +1231,11 @@ private struct SettingsView: View {
                                     Text(profile.label).tag(profile)
                                 }
                             }
-                            Picker("ASR Backend", selection: $viewModel.settings.defaultASRBackend) {
-                                ForEach(ASRBackend.allCases) { backend in
-                                    Text(backend.label).tag(backend)
-                                }
+                            HStack {
+                                Text("ASR Engine")
+                                Spacer()
+                                Text("whisper.cpp")
+                                    .foregroundStyle(DS.ColorToken.fgSecondary)
                             }
                             Toggle("Enable speaker diarization by default", isOn: $viewModel.settings.diarizationEnabledByDefault)
                                 .toggleStyle(.checkbox)
@@ -1282,8 +1283,10 @@ private struct SettingsView: View {
                                     Text(status.status == "ready" ? "Ready" : "Needs setup")
                                         .font(.system(size: 12, weight: .semibold))
                                 }
-                                setupLine("faster-whisper", status.fasterWhisperAvailable ? "Available" : "Missing")
                                 setupLine("whisper.cpp", status.whisperCppAvailable ? "Available" : "Missing")
+                                setupLine("whisper.cpp binary", status.whisperCppBinaryAvailable ? "Available" : "Missing")
+                                setupLine("whisper.cpp turbo model", status.whisperCppTurboModelAvailable ? "Available" : "Missing")
+                                setupLine("whisper.cpp large-v3 model", status.whisperCppBestModelAvailable ? "Available" : "Missing")
                                 setupLine("Diarization backend", status.pyannoteAvailable ? "Available" : "Missing")
                                 setupLine("HF token", status.diarizationTokenPresent ? "Present" : "Missing")
                                 if !status.missingDependencies.isEmpty {

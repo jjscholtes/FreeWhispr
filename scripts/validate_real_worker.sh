@@ -17,7 +17,7 @@ it also runs a transcription job with mockMode=false and VOXSCRIBE_ALLOW_STUB_PI
 
 Prerequisites:
   - pyannote.audio installed in the chosen Python environment
-  - whisper.cpp binary + model available (default ASR backend), OR faster-whisper installed as fallback
+  - whisper.cpp binary + model available (default ASR backend)
   - HF_TOKEN or HUGGINGFACE_HUB_TOKEN exported (for diarization)
 
 Examples:
