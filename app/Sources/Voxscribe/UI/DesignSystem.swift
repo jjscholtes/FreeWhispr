@@ -73,3 +73,45 @@ struct BannerView: View {
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
     }
 }
+
+extension DS {
+    struct SecondaryButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundStyle(DS.ColorToken.fgPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(configuration.isPressed ? DS.ColorToken.bgPanel : DS.ColorToken.bgPanelAlt)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.sm)
+                        .stroke(DS.ColorToken.borderStrong, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        }
+    }
+
+    struct ProminentButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(configuration.isPressed ? Color.black.opacity(0.85) : Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.sm)
+                        .stroke(Color.black, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        }
+    }
+}
+
+extension View {
+    func dsSecondaryButton() -> some View {
+        buttonStyle(DS.SecondaryButtonStyle())
+    }
+
+    func dsProminentButton() -> some View {
+        buttonStyle(DS.ProminentButtonStyle())
+    }
+}

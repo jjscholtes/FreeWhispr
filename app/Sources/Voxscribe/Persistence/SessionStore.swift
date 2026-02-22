@@ -69,6 +69,10 @@ actor SessionStore {
         sessionDirectory(for: sessionId).appendingPathComponent("audio/source.wav")
     }
 
+    func audioFileURL(for manifest: SessionManifest) -> URL {
+        sessionDirectory(for: manifest.id).appendingPathComponent(manifest.audioFileRelativePath)
+    }
+
     func processingDirectory(for sessionId: UUID) -> URL {
         sessionDirectory(for: sessionId).appendingPathComponent("processing", isDirectory: true)
     }
@@ -95,6 +99,20 @@ actor SessionStore {
         try fileManager.createDirectory(at: sessionDir.appendingPathComponent("audio", isDirectory: true), withIntermediateDirectories: true, attributes: nil)
         try fileManager.createDirectory(at: sessionDir.appendingPathComponent("processing", isDirectory: true), withIntermediateDirectories: true, attributes: nil)
         try fileManager.createDirectory(at: sessionDir.appendingPathComponent("transcript", isDirectory: true), withIntermediateDirectories: true, attributes: nil)
+    }
+
+    func importAudioFile(from sourceURL: URL, into sessionId: UUID) throws -> String {
+        let extRaw = sourceURL.pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ext = extRaw.isEmpty ? "wav" : extRaw.lowercased()
+        let relativePath = "audio/source.\(ext)"
+        let destURL = sessionDirectory(for: sessionId).appendingPathComponent(relativePath)
+
+        try fileManager.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+        if fileManager.fileExists(atPath: destURL.path) {
+            try fileManager.removeItem(at: destURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: destURL)
+        return relativePath
     }
 
     func saveManifest(_ manifest: SessionManifest) throws {

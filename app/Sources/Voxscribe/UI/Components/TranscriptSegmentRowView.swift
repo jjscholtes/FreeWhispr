@@ -20,26 +20,31 @@ struct TranscriptSegmentRowView: View {
                 .padding(.top, 8)
 
             Menu {
-                Button("Unassigned") { onAssignSpeaker(nil) }
+                Button("Assign to Unassigned") { onAssignSpeaker(nil) }
                 Divider()
                 ForEach(speakerOptions, id: \.id) { option in
-                    Button(option.label) { onAssignSpeaker(option.id) }
+                    Button("Assign to \(option.label)") { onAssignSpeaker(option.id) }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(alignment: .top, spacing: 6) {
                     SpeakerBadgeView(label: badgeLabel, styleIndex: badgeStyleIndex)
-                    Text(speakerDisplayLabel)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(DS.ColorToken.fgSecondary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                        .padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Speaker")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(DS.ColorToken.fgSecondary)
+                        Text(speakerDisplayLabel)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(DS.ColorToken.fgPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 160, alignment: .leading)
+            .frame(minWidth: 230, idealWidth: 270, maxWidth: 320, alignment: .leading)
             .padding(.top, 4)
+            .help("Assign a speaker to this transcript segment.")
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {

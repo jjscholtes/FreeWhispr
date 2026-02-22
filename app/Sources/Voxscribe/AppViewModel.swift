@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFoundation
 import SwiftUI
 
 @MainActor
@@ -83,6 +84,7 @@ final class AppViewModel: ObservableObject {
     private let projectRootURL: URL
     private var hasBootstrapped = false
     private var processingTask: Task<Void, Never>?
+    private var deferredSpeakerRenamePersistTask: Task<Void, Never>?
     private static let lastExportFolderDefaultsKey = "voxscribe.lastExportFolderPath"
 
     init() {
@@ -286,6 +288,61 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func importRecording() {
+        if recordingController.isRecording {
+            showError("Stop the current recording before importing another file.")
+            return
+        }
+
+        processingTask?.cancel()
+        errorMessage = nil
+        errorTechnicalDetails = nil
+        infoMessage = nil
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Recording"
+        panel.message = "Choose an audio recording to transcribe."
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedFileTypes = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "webm"]
+
+        guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
+
+        Task { @MainActor in
+            do {
+                var manifest = try await sessionStore.createDraftSession(settings: settings)
+                let importedRelativePath = try await sessionStore.importAudioFile(from: sourceURL, into: manifest.id)
+                let durationMs = importedAudioDurationMs(for: sourceURL) ?? 0
+                let importedTitle = defaultImportedSessionTitle(from: sourceURL)
+
+                manifest = try await mutateManifest(sessionId: manifest.id) {
+                    $0.title = importedTitle
+                    $0.audioFileRelativePath = importedRelativePath
+                    $0.recordingState = .stopped
+                    $0.processingState = .queued
+                    $0.processingStage = .preparing
+                    $0.processingProgress = 0.0
+                    $0.durationMs = durationMs
+                    $0.lastError = nil
+                    $0.modelConfig.asrModel = $0.profile.asrModel
+                    $0.modelConfig.diarizationEnabled = settings.diarizationEnabledByDefault
+                }
+
+                await reloadSessions()
+                selectedSessionID = manifest.id
+                currentTranscript = nil
+                transcriptSaveState = .idle
+                stage = .processing(manifest.id)
+                showInfo("Imported \(sourceURL.lastPathComponent)")
+                startProcessing(sessionId: manifest.id)
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
     func cancelRecording() {
         recordingController.cancelRecording(deleteFile: true)
         errorMessage = nil
@@ -341,7 +398,7 @@ final class AppViewModel: ObservableObject {
         processingTask = Task { @MainActor in
             do {
                 let manifest = try await sessionStore.loadManifest(sessionId: sessionId)
-                let audioURL = await sessionStore.audioFileURL(for: sessionId)
+                let audioURL = await sessionStore.audioFileURL(for: manifest)
                 let outputDir = await sessionStore.sessionDirectory(for: sessionId)
 
                 _ = try await mutateManifest(sessionId: sessionId) {
@@ -526,29 +583,67 @@ final class AppViewModel: ObservableObject {
         guard var transcript = currentTranscript else { return }
         guard let index = transcript.speakers.firstIndex(where: { $0.id == speakerId }) else { return }
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentTrimmed = transcript.speakers[index].displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard trimmed != currentTrimmed else { return }
         transcript.speakers[index].displayName = trimmed.isEmpty ? nil : trimmed
         transcript.speakers[index].isUserEdited = !trimmed.isEmpty
         transcript.touch()
         currentTranscript = transcript
-        persistTranscript(transcript)
+        scheduleSpeakerRenamePersist(transcript)
     }
 
     private func persistTranscript(_ transcript: TranscriptDocument) {
+        deferredSpeakerRenamePersistTask?.cancel()
+        deferredSpeakerRenamePersistTask = nil
         Task { @MainActor in
-            transcriptSaveState = .saving
-            do {
-                try await sessionStore.saveTranscript(transcript)
+            await performTranscriptPersist(
+                transcript,
+                includeArtifacts: true,
+                reloadSessionList: true
+            )
+        }
+    }
+
+    private func scheduleSpeakerRenamePersist(_ transcript: TranscriptDocument) {
+        deferredSpeakerRenamePersistTask?.cancel()
+        deferredSpeakerRenamePersistTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.transcriptSaveState = .saving
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard !Task.isCancelled else { return }
+            await self.performTranscriptPersist(
+                transcript,
+                includeArtifacts: false,
+                reloadSessionList: false
+            )
+            self.deferredSpeakerRenamePersistTask = nil
+        }
+    }
+
+    private func performTranscriptPersist(
+        _ transcript: TranscriptDocument,
+        includeArtifacts: Bool,
+        reloadSessionList: Bool
+    ) async {
+        transcriptSaveState = .saving
+        do {
+            try await sessionStore.saveTranscript(transcript)
+            if includeArtifacts {
                 let sessionDir = await sessionStore.sessionDirectory(for: transcript.sessionId)
                 let artifacts = try await TranscriptExporter.exportAll(transcript, to: sessionDir, using: sessionStore)
                 _ = try await mutateManifest(sessionId: transcript.sessionId) {
                     $0.artifactStatus = artifacts
                 }
-                await reloadSessions()
-                transcriptSaveState = .saved(Date())
-            } catch {
-                transcriptSaveState = .failed(error.localizedDescription)
-                showError(error.localizedDescription)
             }
+            if reloadSessionList {
+                await reloadSessions()
+            }
+            transcriptSaveState = .saved(Date())
+        } catch is CancellationError {
+            // Ignore canceled deferred saves.
+        } catch {
+            transcriptSaveState = .failed(error.localizedDescription)
+            showError(error.localizedDescription)
         }
     }
 
@@ -876,6 +971,23 @@ final class AppViewModel: ObservableObject {
     private func sanitizedExportStem(_ value: String) -> String {
         let stem = sanitizeFilename(value)
         return stem.isEmpty ? "transcript" : stem
+    }
+
+    private func defaultImportedSessionTitle(from sourceURL: URL) -> String {
+        let base = sourceURL.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !base.isEmpty {
+            return base
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return "Imported \(formatter.string(from: Date()))"
+    }
+
+    private func importedAudioDurationMs(for sourceURL: URL) -> Int? {
+        let asset = AVURLAsset(url: sourceURL)
+        let seconds = CMTimeGetSeconds(asset.duration)
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        return Int((seconds * 1000).rounded())
     }
 
     private func defaultExportFilenameStem() -> String {

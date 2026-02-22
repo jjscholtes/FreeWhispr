@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="${VOXSCRIBE_APP_NAME:-Kopie}"
 BUNDLE_ID="${VOXSCRIBE_BUNDLE_ID:-com.jesse.voxscribe}"
+APP_ICON_ICNS="${VOXSCRIBE_APP_ICON_ICNS:-$ROOT/branding/Kopie.icns}"
 APP_PKG_PATH="$ROOT/app"
 DIST_DIR="$ROOT/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
@@ -125,6 +126,10 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BUILD_EXECUTABLE" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
+if [[ -f "$APP_ICON_ICNS" ]]; then
+  cp "$APP_ICON_ICNS" "$RES_DIR/$APP_NAME.icns"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -136,6 +141,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
   <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
+  <key>CFBundleIconFile</key>
+  <string>$APP_NAME</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

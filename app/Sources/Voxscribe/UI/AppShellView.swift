@@ -82,9 +82,19 @@ private struct SessionShelfView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .dsProminentButton()
                 .tint(.black)
                 .keyboardShortcut("r", modifiers: [.command])
+
+                Button(action: viewModel.importRecording) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import Recording…")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .dsSecondaryButton()
+                .keyboardShortcut("o", modifiers: [.command])
 
                 Button(action: { viewModel.isShowingSettings = true }) {
                     HStack {
@@ -93,7 +103,7 @@ private struct SessionShelfView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .dsSecondaryButton()
                 .keyboardShortcut(",", modifiers: [.command])
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -390,8 +400,15 @@ private struct IdleStageView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .frame(minWidth: 160)
                 }
-                .buttonStyle(.borderedProminent)
+                .dsProminentButton()
                 .tint(.black)
+
+                Button(action: viewModel.importRecording) {
+                    Text("Import Recording…")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(minWidth: 160)
+                }
+                .dsSecondaryButton()
 
                 Button(showOptions ? "Hide options" : "More options") {
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -426,7 +443,7 @@ private struct IdleStageView: View {
                         Toggle("Enable diarization", isOn: $viewModel.settings.diarizationEnabledByDefault)
                             .toggleStyle(.checkbox)
                         Button("Save defaults") { viewModel.saveSettings() }
-                            .buttonStyle(.bordered)
+                            .dsSecondaryButton()
                     }
                 }
 
@@ -493,7 +510,7 @@ private struct RecordingStageView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .frame(minWidth: 170)
                 }
-                .buttonStyle(.borderedProminent)
+                .dsProminentButton()
                 .tint(.black)
 
                 if let manifest {
@@ -590,7 +607,7 @@ private struct ProcessingStageView: View {
                         }
                         HStack {
                             Button("Retry") { viewModel.retryProcessing() }
-                                .buttonStyle(.borderedProminent)
+                                .dsProminentButton()
                                 .tint(.black)
                             if lastError.code == "DIARIZATION_AUTH_REQUIRED"
                                 || lastError.code == "MODEL_NOT_INSTALLED"
@@ -598,10 +615,10 @@ private struct ProcessingStageView: View {
                                 || lastError.message.localizedCaseInsensitiveContains("pyannote")
                             {
                                 Button("Open Settings") { viewModel.isShowingSettings = true }
-                                    .buttonStyle(.bordered)
+                                    .dsSecondaryButton()
                             }
                             Button("Reveal Logs") { viewModel.revealProcessingLogs() }
-                                .buttonStyle(.bordered)
+                                .dsSecondaryButton()
                         }
                     }
                     .padding(12)
@@ -612,7 +629,7 @@ private struct ProcessingStageView: View {
 
                 HStack(spacing: 12) {
                     Button("Cancel processing") { viewModel.cancelProcessing() }
-                        .buttonStyle(.bordered)
+                        .dsSecondaryButton()
                     Button("Retry") { viewModel.retryProcessing() }
                         .buttonStyle(.plain)
                         .foregroundStyle(DS.ColorToken.fgSecondary)
@@ -696,7 +713,7 @@ private struct TranscriptStageView: View {
                     Text("Transcript not available yet")
                         .font(.system(size: 20, weight: .semibold))
                     Button("Retry Processing") { viewModel.retryProcessing() }
-                        .buttonStyle(.borderedProminent)
+                        .dsProminentButton()
                         .tint(.black)
                 }
                 .padding(32)
@@ -738,7 +755,7 @@ private struct TranscriptStageView: View {
             Spacer()
             if let manifest = viewModel.selectedManifest {
                 Button("Rename…") { viewModel.promptRenameSession(manifest) }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
                 Menu("Move") {
                     Button("Unfiled") {
                         viewModel.moveSession(manifest, toFolderId: nil)
@@ -759,22 +776,19 @@ private struct TranscriptStageView: View {
                 .menuStyle(.borderlessButton)
             }
             Button("Save") { viewModel.saveCurrentTranscriptNow() }
-                .buttonStyle(.bordered)
+                .dsSecondaryButton()
                 .keyboardShortcut("s", modifiers: [.command])
             Button("Export…") { viewModel.exportCurrentTranscript() }
-                .buttonStyle(.borderedProminent)
+                .dsProminentButton()
                 .tint(.black)
                 .keyboardShortcut("e", modifiers: [.command])
             if let sessionId = viewModel.selectedSessionID {
                 Button("Reveal Files") { viewModel.revealSessionInFinder(sessionId) }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
             }
-            Button("Settings") { viewModel.isShowingSettings = true }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(",", modifiers: [.command])
             if let manifest = viewModel.selectedManifest {
                 Button("Delete") { viewModel.promptDeleteSession(manifest) }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
             }
         }
         .frame(height: 56)
@@ -809,6 +823,9 @@ private struct TranscriptStageView: View {
     private func speakerRenameStrip(_ transcript: TranscriptDocument) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             CapsLabel(text: "Speakers")
+            Text("Renaming a speaker here updates all transcript rows for that speaker.")
+                .font(.system(size: 12))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
             FlowLayout(spacing: 8) {
                 ForEach(Array(transcript.speakers.enumerated()), id: \.element.id) { index, speaker in
                     SpeakerRenameChip(
@@ -855,15 +872,18 @@ private struct SpeakerRenameChip: View {
     let onRename: (String) -> Void
     @State private var name: String = ""
     @State private var lastCommittedName: String = ""
+    @State private var autosaveTask: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             SpeakerBadgeView(label: "S\(index)", styleIndex: index)
             TextField("Speaker \(index)", text: $name)
-                .textFieldStyle(.plain)
+                .textFieldStyle(.roundedBorder)
                 .font(.system(size: 13))
-                .frame(width: 140)
+                .foregroundColor(.primary)
+                .tint(.black)
+                .frame(width: 196)
                 .focused($isFocused)
                 .onSubmit {
                     commitIfNeeded()
@@ -873,14 +893,19 @@ private struct SpeakerRenameChip: View {
                         commitIfNeeded()
                     }
                 }
+                .onChange(of: name) { _, _ in
+                    guard isFocused else { return }
+                    scheduleAutosave()
+                }
             Button("Save") { commitIfNeeded() }
-                .buttonStyle(.plain)
-                .foregroundStyle(DS.ColorToken.fgSecondary)
+                .dsSecondaryButton()
+                .controlSize(.small)
         }
         .padding(8)
-        .background(Color.white)
+        .background(DS.ColorToken.bgPanel)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        .help("Rename this speaker across the transcript.")
         .onAppear { syncFromSpeaker() }
         .onChange(of: speaker.displayName) { _, _ in
             if !isFocused {
@@ -890,9 +915,15 @@ private struct SpeakerRenameChip: View {
         .onChange(of: speaker.id) { _, _ in
             syncFromSpeaker()
         }
+        .onDisappear {
+            autosaveTask?.cancel()
+            autosaveTask = nil
+        }
     }
 
     private func commitIfNeeded() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let current = lastCommittedName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != current else {
@@ -908,6 +939,16 @@ private struct SpeakerRenameChip: View {
         let current = speaker.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         name = current
         lastCommittedName = current
+    }
+
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            guard isFocused else { return }
+            commitIfNeeded()
+        }
     }
 }
 
@@ -938,7 +979,7 @@ private struct SettingsView: View {
                     .font(.system(size: 24, weight: .semibold))
                 Spacer()
                 Button("Done") { viewModel.isShowingSettings = false }
-                    .buttonStyle(.borderedProminent)
+                    .dsProminentButton()
                     .tint(.black)
             }
 
@@ -975,11 +1016,11 @@ private struct SettingsView: View {
                                         NSWorkspace.shared.open(url)
                                     }
                                 }
-                                .buttonStyle(.bordered)
+                                .dsSecondaryButton()
                                 Button("Clear token") {
                                     viewModel.huggingFaceToken = ""
                                 }
-                                .buttonStyle(.bordered)
+                                .dsSecondaryButton()
                             }
                         }
                     }
@@ -1034,9 +1075,9 @@ private struct SettingsView: View {
                         Button("Validate setup") {
                             Task { await viewModel.validateSetup() }
                         }
-                        .buttonStyle(.bordered)
+                        .dsSecondaryButton()
                         Button("Save settings") { viewModel.saveSettings() }
-                            .buttonStyle(.borderedProminent)
+                            .dsProminentButton()
                             .tint(.black)
                     }
                     .padding(.top, 4)
@@ -1088,7 +1129,7 @@ private struct ExportSheetView: View {
                     .font(.system(size: 22, weight: .semibold))
                 Spacer()
                 Button("Close") { viewModel.cancelExportSheet() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -1155,10 +1196,10 @@ private struct ExportSheetView: View {
 
             HStack {
                 Button("Cancel") { viewModel.cancelExportSheet() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
                 Spacer()
                 Button("Choose Folder & Export") { viewModel.confirmExportCurrentTranscript() }
-                    .buttonStyle(.borderedProminent)
+                    .dsProminentButton()
                     .tint(.black)
                     .disabled(!viewModel.exportFormatSelection.hasAnySelection)
                     .keyboardShortcut(.defaultAction)
@@ -1180,7 +1221,7 @@ private struct CreateFolderSheetView: View {
                     .font(.system(size: 22, weight: .semibold))
                 Spacer()
                 Button("Close") { viewModel.dismissCreateFolderPrompt() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
             }
 
             Text("Create a folder to organize transcripts in the sidebar.")
@@ -1205,10 +1246,10 @@ private struct CreateFolderSheetView: View {
 
             HStack {
                 Button("Cancel") { viewModel.dismissCreateFolderPrompt() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
                 Spacer()
                 Button("Create Folder") { viewModel.confirmCreateFolder() }
-                    .buttonStyle(.borderedProminent)
+                    .dsProminentButton()
                     .tint(.black)
                     .keyboardShortcut(.defaultAction)
                     .disabled(viewModel.createFolderDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1235,7 +1276,7 @@ private struct RenameSessionSheetView: View {
                     .font(.system(size: 22, weight: .semibold))
                 Spacer()
                 Button("Close") { viewModel.dismissRenamePrompt() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
             }
 
             if let manifest = viewModel.pendingRenameSession {
@@ -1267,10 +1308,10 @@ private struct RenameSessionSheetView: View {
 
             HStack {
                 Button("Cancel") { viewModel.dismissRenamePrompt() }
-                    .buttonStyle(.bordered)
+                    .dsSecondaryButton()
                 Spacer()
                 Button("Save Name") { viewModel.confirmRenamePendingSession() }
-                    .buttonStyle(.borderedProminent)
+                    .dsProminentButton()
                     .tint(.black)
                     .keyboardShortcut(.defaultAction)
                     .disabled(viewModel.renameSessionDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
