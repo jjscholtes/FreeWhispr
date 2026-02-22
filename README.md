@@ -11,6 +11,19 @@ FreeWhispr is a local macOS transcription app for recording or importing audio, 
 - Packaging scripts for bundled macOS app (`FreeWhispr.app` / `.zip`)
 - Versioned JSON contract examples and basic tests for session store, exports, reconciliation, and worker IPC
 
+## Technical Stack (Short Overview)
+
+FreeWhispr is split into a native macOS app and a local processing worker:
+
+- **macOS app (SwiftUI + AVFoundation)**: recording/import, session management, transcript editing, speaker naming, exports, and settings UI
+- **ASR (speech-to-text)**: [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) running locally (default backend), with Apple Silicon acceleration (Metal/GPU when available)
+- **Speaker separation (diarization)**: `pyannote.audio` running locally in a Python worker runtime (Hugging Face token required for gated pyannote model access)
+- **Worker protocol**: JSONL IPC between the Swift app and Python worker (progress events, setup validation, jobs, errors)
+- **Storage**: local session files in macOS Application Support (audio, transcript JSON/TXT/SRT, logs, processing metrics)
+- **Security**: Hugging Face token stored in the macOS Keychain (not in transcript/session JSON files)
+- **Packaging**: macOS `.app`, `.zip`, and `.dmg` via local packaging scripts (optional bundled Python diarization runtime, optional on-demand speaker-runtime install)
+
+This architecture keeps the UI native and responsive, while allowing the ML stack (`whisper.cpp` + `pyannote`) to evolve independently.
 
 ## Speaker Recognition (Speaker Separation) Setup - Step by Step
 
