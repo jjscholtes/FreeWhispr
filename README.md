@@ -1,6 +1,6 @@
-# FreeWhispr (macOS Local Transcription Prototype)
+# FreeWhispr
 
-Monochrome macOS transcription tool prototype for recording conversations and producing speaker-labeled transcripts locally.
+FreeWhispr is a local macOS transcription app for recording or importing audio, generating transcripts, assigning speakers, and exporting results. It keeps the workflow simple with fast recording, searchable sessions and folders, and built-in editing tools for speaker names and transcript cleanup.
 
 ## Current State
 
