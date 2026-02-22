@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="#0A0A0A"/>
+
+  <!-- Tape spool -->
+  <circle cx="356" cy="512" r="170" fill="#FFFFFF"/>
+  <circle cx="356" cy="512" r="58" fill="#0A0A0A"/>
+
+  <!-- Spool cutouts / spokes (kept chunky for small sizes) -->
+  <path d="M356 390C385 390 408 413 408 442V470H304V442C304 413 327 390 356 390Z" fill="#0A0A0A"/>
+  <path d="M448 551C448 580 425 603 396 603H368V499H396C425 499 448 522 448 551Z" fill="#0A0A0A"/>
+  <path d="M264 551C264 522 287 499 316 499H344V603H316C287 603 264 580 264 551Z" fill="#0A0A0A"/>
+
+  <!-- Transcript lines -->
+  <rect x="532" y="396" width="260" height="54" rx="27" fill="#FFFFFF"/>
+  <rect x="532" y="482" width="184" height="54" rx="27" fill="#FFFFFF"/>
+
+  <!-- Speaker-turn segmented line -->
+  <rect x="532" y="568" width="90" height="54" rx="27" fill="#FFFFFF"/>
+  <rect x="646" y="568" width="146" height="54" rx="27" fill="#FFFFFF"/>
+
+  <!-- Optional tiny REC dot (disabled in monochrome proposal) -->
+  <!-- <circle cx="794" cy="304" r="22" fill="#D92D20"/> -->
+</svg>

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="${VOXSCRIBE_APP_NAME:-Voxscribe}"
+APP_NAME="${VOXSCRIBE_APP_NAME:-Kopie}"
 BUNDLE_ID="${VOXSCRIBE_BUNDLE_ID:-com.jesse.voxscribe}"
 APP_PKG_PATH="$ROOT/app"
 DIST_DIR="$ROOT/dist"
@@ -149,7 +149,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Voxscribe records microphone audio to create local transcripts.</string>
+  <string>Kopie records microphone audio to create local transcripts.</string>
 </dict>
 </plist>
 EOF

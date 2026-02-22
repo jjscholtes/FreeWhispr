@@ -28,13 +28,17 @@ struct TranscriptSegmentRowView: View {
             } label: {
                 HStack(spacing: 4) {
                     SpeakerBadgeView(label: badgeLabel, styleIndex: badgeStyleIndex)
+                    Text(speakerDisplayLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                        .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(DS.ColorToken.fgSecondary)
                 }
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 78, alignment: .leading)
+            .frame(width: 160, alignment: .leading)
             .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -106,6 +110,10 @@ struct TranscriptSegmentRowView: View {
         guard let speakerId = segment.speakerId,
               let index = transcript.speakers.firstIndex(where: { $0.id == speakerId }) else { return 4 }
         return index + 1
+    }
+
+    private var speakerDisplayLabel: String {
+        transcript.speakerLabel(for: segment.speakerId)
     }
 
     private func commitIfNeeded() {

@@ -3,6 +3,7 @@ import SwiftUI
 struct SessionRowView: View {
     let manifest: SessionManifest
     let metadata: String
+    let folderName: String?
     let selected: Bool
 
     var body: some View {
@@ -17,7 +18,12 @@ struct SessionRowView: View {
                 .foregroundStyle(DS.ColorToken.fgSecondary)
                 .lineLimit(1)
 
-            rowStatusContent
+            HStack(spacing: 6) {
+                if let folderName, !folderName.isEmpty {
+                    CapsLabel(text: folderName)
+                }
+                rowStatusContent
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -76,4 +82,3 @@ struct SessionRowView: View {
         return try JSONDecoder().decode(TranscriptDocument.self, from: data)
     }
 }
-

@@ -27,6 +27,10 @@ struct AppShellView: View {
             ExportSheetView(viewModel: viewModel)
                 .frame(width: 520, height: 420)
         }
+        .sheet(isPresented: $viewModel.isShowingCreateFolderSheet) {
+            CreateFolderSheetView(viewModel: viewModel)
+                .frame(width: 440, height: 210)
+        }
         .sheet(
             isPresented: Binding(
                 get: { viewModel.pendingRenameSession != nil },
@@ -92,16 +96,48 @@ private struct SessionShelfView: View {
                 .buttonStyle(.bordered)
                 .keyboardShortcut(",", modifiers: [.command])
 
-                VStack(alignment: .leading, spacing: 6) {
-                    CapsLabel(text: "Folders")
-                    VStack(spacing: 6) {
-                        ForEach(AppViewModel.SessionShelfFilter.allCases) { filter in
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        CapsLabel(text: "Smart Folders")
+                        VStack(spacing: 6) {
+                            ForEach(AppViewModel.SessionShelfFilter.allCases) { filter in
+                                SessionFolderRow(
+                                    title: filter.label,
+                                    count: viewModel.sessionCount(for: filter),
+                                    selected: viewModel.isSelectedSmartFolder(filter),
+                                    action: { viewModel.selectSmartFolder(filter) }
+                                )
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            CapsLabel(text: "Folders")
+                            Spacer()
+                            Button(action: viewModel.promptCreateFolder) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(DS.ColorToken.fgSecondary)
+                        }
+
+                        VStack(spacing: 6) {
                             SessionFolderRow(
-                                title: filter.label,
-                                count: viewModel.sessionCount(for: filter),
-                                selected: viewModel.sessionShelfFilter == filter,
-                                action: { viewModel.sessionShelfFilter = filter }
+                                title: "Unfiled",
+                                count: viewModel.sessionCount(forFolderId: nil),
+                                selected: viewModel.isSelectedUserFolder(nil),
+                                action: viewModel.selectUnfiledFolder
                             )
+                            ForEach(viewModel.userFolders) { folder in
+                                SessionFolderRow(
+                                    title: folder.name,
+                                    count: viewModel.sessionCount(forFolderId: folder.id),
+                                    selected: viewModel.isSelectedUserFolder(folder.id),
+                                    action: { viewModel.selectUserFolder(folder.id) }
+                                )
+                            }
                         }
                     }
                 }
@@ -172,6 +208,7 @@ private struct SessionShelfRowItem: View {
                 SessionRowView(
                     manifest: manifest,
                     metadata: viewModel.formatSessionMeta(manifest),
+                    folderName: viewModel.folderName(for: manifest.folderId),
                     selected: viewModel.selectedSessionID == manifest.id
                 )
             }
@@ -184,6 +221,23 @@ private struct SessionShelfRowItem: View {
                     }
                     Button("Rename…") {
                         viewModel.promptRenameSession(manifest)
+                    }
+                    Menu("Move to Folder") {
+                        Button("Unfiled") {
+                            viewModel.moveSession(manifest, toFolderId: nil)
+                        }
+                        if !viewModel.userFolders.isEmpty {
+                            Divider()
+                            ForEach(viewModel.userFolders) { folder in
+                                Button(folder.name) {
+                                    viewModel.moveSession(manifest, toFolderId: folder.id)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("New Folder…") {
+                            viewModel.promptCreateFolder()
+                        }
                     }
                     Button("Reveal in Finder") {
                         viewModel.revealSessionInFinder(manifest.id)
@@ -219,6 +273,23 @@ private struct SessionShelfRowItem: View {
             }
             Button("Rename…") {
                 viewModel.promptRenameSession(manifest)
+            }
+            Menu("Move to Folder") {
+                Button("Unfiled") {
+                    viewModel.moveSession(manifest, toFolderId: nil)
+                }
+                if !viewModel.userFolders.isEmpty {
+                    Divider()
+                    ForEach(viewModel.userFolders) { folder in
+                        Button(folder.name) {
+                            viewModel.moveSession(manifest, toFolderId: folder.id)
+                        }
+                    }
+                }
+                Divider()
+                Button("New Folder…") {
+                    viewModel.promptCreateFolder()
+                }
             }
             Button("Reveal in Finder") {
                 viewModel.revealSessionInFinder(manifest.id)
@@ -653,6 +724,11 @@ private struct TranscriptStageView: View {
                 Text(manifest.languageMode == .auto ? "AUTO" : manifest.languageMode.rawValue.uppercased())
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(DS.ColorToken.fgSecondary)
+                if let folderName = viewModel.folderName(for: manifest.folderId) {
+                    CapsLabel(text: folderName)
+                } else {
+                    CapsLabel(text: "UNFILED")
+                }
             }
             if let saveText = viewModel.transcriptSaveStatusText {
                 Text(saveText)
@@ -663,6 +739,24 @@ private struct TranscriptStageView: View {
             if let manifest = viewModel.selectedManifest {
                 Button("Rename…") { viewModel.promptRenameSession(manifest) }
                     .buttonStyle(.bordered)
+                Menu("Move") {
+                    Button("Unfiled") {
+                        viewModel.moveSession(manifest, toFolderId: nil)
+                    }
+                    if !viewModel.userFolders.isEmpty {
+                        Divider()
+                        ForEach(viewModel.userFolders) { folder in
+                            Button(folder.name) {
+                                viewModel.moveSession(manifest, toFolderId: folder.id)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("New Folder…") {
+                        viewModel.promptCreateFolder()
+                    }
+                }
+                .menuStyle(.borderlessButton)
             }
             Button("Save") { viewModel.saveCurrentTranscriptNow() }
                 .buttonStyle(.bordered)
@@ -1072,6 +1166,61 @@ private struct ExportSheetView: View {
         }
         .padding(20)
         .background(DS.ColorToken.bgApp)
+    }
+}
+
+private struct CreateFolderSheetView: View {
+    @ObservedObject var viewModel: AppViewModel
+    @FocusState private var isNameFieldFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("New Folder")
+                    .font(.system(size: 22, weight: .semibold))
+                Spacer()
+                Button("Close") { viewModel.dismissCreateFolderPrompt() }
+                    .buttonStyle(.bordered)
+            }
+
+            Text("Create a folder to organize transcripts in the sidebar.")
+                .font(.system(size: 12))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Folder name")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+                TextField("e.g. Clients, Research, Interviews", text: $viewModel.createFolderDraftName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isNameFieldFocused)
+                    .onSubmit { viewModel.confirmCreateFolder() }
+            }
+            .padding(14)
+            .background(DS.ColorToken.bgPanel)
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Button("Cancel") { viewModel.dismissCreateFolderPrompt() }
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("Create Folder") { viewModel.confirmCreateFolder() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.black)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(viewModel.createFolderDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .background(DS.ColorToken.bgApp)
+        .onAppear {
+            DispatchQueue.main.async {
+                isNameFieldFocused = true
+            }
+        }
     }
 }
 

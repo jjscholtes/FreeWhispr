@@ -33,7 +33,7 @@ struct TranscriptExporter {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
         guard selection.hasAnySelection else {
-            throw NSError(domain: "VoxscribeExport", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select at least one export format."])
+            throw NSError(domain: "KopieExport", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select at least one export format."])
         }
 
         let stem = baseFilename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "transcript" : baseFilename

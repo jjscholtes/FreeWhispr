@@ -29,6 +29,12 @@ final class AppViewModel: ObservableObject {
         case failed(String)
     }
 
+    enum SessionShelfSelection: Equatable {
+        case smart(SessionShelfFilter)
+        case unfiled
+        case userFolder(UUID)
+    }
+
     struct ProcessingErrorPresentation: Equatable {
         let message: String
         let technicalDetails: String?
@@ -46,7 +52,7 @@ final class AppViewModel: ObservableObject {
     @Published var currentTranscript: TranscriptDocument?
     @Published var stage: MainStage = .idle
     @Published var searchQuery = ""
-    @Published var sessionShelfFilter: SessionShelfFilter = .all
+    @Published var sessionShelfSelection: SessionShelfSelection = .smart(.all)
     @Published var transcriptSearchQuery = ""
     @Published var transcriptSpeakerFilter: String = "all"
     @Published var transcriptSaveState: TranscriptSaveState = .idle
@@ -62,6 +68,8 @@ final class AppViewModel: ObservableObject {
     @Published var pendingDeleteSession: SessionManifest?
     @Published var pendingRenameSession: SessionManifest?
     @Published var renameSessionDraftTitle = ""
+    @Published var isShowingCreateFolderSheet = false
+    @Published var createFolderDraftName = ""
     @Published var isShowingExportSheet = false
     @Published var exportFormatSelection = ExportFormatSelection()
     @Published var exportFilenameStem = ""
@@ -133,7 +141,7 @@ final class AppViewModel: ObservableObject {
 
     var filteredSessions: [SessionManifest] {
         sessions.filter { manifest in
-            guard matchesSessionShelfFilter(manifest, filter: sessionShelfFilter) else { return false }
+            guard matchesSessionShelfSelection(manifest, selection: sessionShelfSelection) else { return false }
 
             let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !query.isEmpty else { return true }
@@ -147,6 +155,46 @@ final class AppViewModel: ObservableObject {
         sessions.filter { matchesSessionShelfFilter($0, filter: filter) }.count
     }
 
+    func sessionCount(forFolderId folderId: UUID?) -> Int {
+        sessions.filter { $0.folderId == folderId }.count
+    }
+
+    var userFolders: [SessionFolder] {
+        settings.customFolders.sorted {
+            if $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedSame {
+                return $0.createdAt < $1.createdAt
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    func isSelectedSmartFolder(_ filter: SessionShelfFilter) -> Bool {
+        sessionShelfSelection == .smart(filter)
+    }
+
+    func isSelectedUserFolder(_ folderId: UUID?) -> Bool {
+        switch sessionShelfSelection {
+        case .unfiled:
+            return folderId == nil
+        case .userFolder(let selectedId):
+            return selectedId == folderId
+        case .smart:
+            return false
+        }
+    }
+
+    func selectSmartFolder(_ filter: SessionShelfFilter) {
+        sessionShelfSelection = .smart(filter)
+    }
+
+    func selectUnfiledFolder() {
+        sessionShelfSelection = .unfiled
+    }
+
+    func selectUserFolder(_ folderId: UUID) {
+        sessionShelfSelection = .userFolder(folderId)
+    }
+
     var selectedManifest: SessionManifest? {
         guard let selectedSessionID else { return nil }
         return sessions.first(where: { $0.id == selectedSessionID })
@@ -155,6 +203,11 @@ final class AppViewModel: ObservableObject {
     var transcriptSpeakerOptions: [(id: String, label: String)] {
         guard let currentTranscript else { return [] }
         return currentTranscript.speakers.map { ($0.id, $0.effectiveLabel) }
+    }
+
+    func folderName(for folderId: UUID?) -> String? {
+        guard let folderId else { return nil }
+        return settings.customFolders.first(where: { $0.id == folderId })?.name
     }
 
     var transcriptSaveStatusText: String? {
@@ -572,6 +625,35 @@ final class AppViewModel: ObservableObject {
         pendingDeleteSession = manifest
     }
 
+    func promptCreateFolder() {
+        createFolderDraftName = ""
+        isShowingCreateFolderSheet = true
+    }
+
+    func dismissCreateFolderPrompt() {
+        isShowingCreateFolderSheet = false
+        createFolderDraftName = ""
+    }
+
+    func confirmCreateFolder() {
+        let trimmed = createFolderDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showError("Folder name cannot be empty.")
+            return
+        }
+        if settings.customFolders.contains(where: { $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+            showError("A folder with this name already exists.")
+            return
+        }
+
+        let folder = SessionFolder(name: trimmed)
+        settings.customFolders.append(folder)
+        isShowingCreateFolderSheet = false
+        createFolderDraftName = ""
+        persistSettingsOnly(successMessage: "Folder created")
+        sessionShelfSelection = .userFolder(folder.id)
+    }
+
     func promptRenameSession(_ manifest: SessionManifest) {
         pendingRenameSession = manifest
         renameSessionDraftTitle = manifest.title
@@ -648,6 +730,26 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func moveSession(_ manifest: SessionManifest, toFolderId folderId: UUID?) {
+        if manifest.recordingState == .recording || manifest.processingState == .running {
+            showError("Stop recording/processing before moving this session.")
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                _ = try await mutateManifest(sessionId: manifest.id) {
+                    $0.folderId = folderId
+                }
+                await reloadSessions()
+                let destinationLabel = folderName(for: folderId) ?? "Unfiled"
+                showInfo("Moved to \(destinationLabel)")
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
     func clearBanner() {
         errorMessage = nil
         errorTechnicalDetails = nil
@@ -662,6 +764,20 @@ final class AppViewModel: ObservableObject {
         return manifest
     }
 
+    private func persistSettingsOnly(successMessage: String? = nil) {
+        let currentSettings = settings
+        Task { @MainActor in
+            do {
+                try await settingsStore.save(currentSettings)
+                if let successMessage {
+                    showInfo(successMessage)
+                }
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
     private func matchesSessionShelfFilter(_ manifest: SessionManifest, filter: SessionShelfFilter) -> Bool {
         switch filter {
         case .all:
@@ -674,6 +790,17 @@ final class AppViewModel: ObservableObject {
             return manifest.processingState == .completed
         case .failed:
             return manifest.processingState == .failed
+        }
+    }
+
+    private func matchesSessionShelfSelection(_ manifest: SessionManifest, selection: SessionShelfSelection) -> Bool {
+        switch selection {
+        case .smart(let filter):
+            return matchesSessionShelfFilter(manifest, filter: filter)
+        case .unfiled:
+            return manifest.folderId == nil
+        case .userFolder(let folderId):
+            return manifest.folderId == folderId
         }
     }
 

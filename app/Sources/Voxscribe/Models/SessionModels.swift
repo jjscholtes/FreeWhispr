@@ -95,6 +95,18 @@ struct ProcessingError: Codable, Sendable, Equatable {
     var details: [String: String]?
 }
 
+struct SessionFolder: Codable, Identifiable, Sendable, Equatable {
+    var id: UUID
+    var name: String
+    var createdAt: Date
+
+    init(id: UUID = UUID(), name: String, createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+    }
+}
+
 struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
     static let schemaVersion = 1
 
@@ -103,6 +115,7 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
     var createdAt: Date
     var updatedAt: Date
     var title: String
+    var folderId: UUID?
     var recordingState: RecordingState
     var processingState: ProcessingState
     var processingStage: ProcessingStage?
@@ -121,6 +134,7 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         title: String,
+        folderId: UUID? = nil,
         recordingState: RecordingState,
         processingState: ProcessingState,
         processingStage: ProcessingStage? = nil,
@@ -138,6 +152,7 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.title = title
+        self.folderId = folderId
         self.recordingState = recordingState
         self.processingState = processingState
         self.processingStage = processingStage
@@ -169,7 +184,7 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
 }
 
 struct AppSettings: Codable, Sendable, Equatable {
-    static let schemaVersion = 1
+    static let schemaVersion = 2
 
     var schemaVersion: Int = AppSettings.schemaVersion
     var defaultLanguageMode: LanguageMode
@@ -177,12 +192,53 @@ struct AppSettings: Codable, Sendable, Equatable {
     var workerScriptPath: String?
     var enableMockPipeline: Bool
     var diarizationEnabledByDefault: Bool
+    var customFolders: [SessionFolder]
+
+    init(
+        schemaVersion: Int = AppSettings.schemaVersion,
+        defaultLanguageMode: LanguageMode,
+        defaultProfile: ProcessingProfile,
+        workerScriptPath: String?,
+        enableMockPipeline: Bool,
+        diarizationEnabledByDefault: Bool,
+        customFolders: [SessionFolder] = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.defaultLanguageMode = defaultLanguageMode
+        self.defaultProfile = defaultProfile
+        self.workerScriptPath = workerScriptPath
+        self.enableMockPipeline = enableMockPipeline
+        self.diarizationEnabledByDefault = diarizationEnabledByDefault
+        self.customFolders = customFolders
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case defaultLanguageMode
+        case defaultProfile
+        case workerScriptPath
+        case enableMockPipeline
+        case diarizationEnabledByDefault
+        case customFolders
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        defaultLanguageMode = try container.decode(LanguageMode.self, forKey: .defaultLanguageMode)
+        defaultProfile = try container.decode(ProcessingProfile.self, forKey: .defaultProfile)
+        workerScriptPath = try container.decodeIfPresent(String.self, forKey: .workerScriptPath)
+        enableMockPipeline = try container.decodeIfPresent(Bool.self, forKey: .enableMockPipeline) ?? false
+        diarizationEnabledByDefault = try container.decodeIfPresent(Bool.self, forKey: .diarizationEnabledByDefault) ?? true
+        customFolders = try container.decodeIfPresent([SessionFolder].self, forKey: .customFolders) ?? []
+    }
 
     static let `default` = AppSettings(
         defaultLanguageMode: .auto,
         defaultProfile: .fast,
         workerScriptPath: nil,
         enableMockPipeline: false,
-        diarizationEnabledByDefault: true
+        diarizationEnabledByDefault: true,
+        customFolders: []
     )
 }

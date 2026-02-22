@@ -1,4 +1,4 @@
-# Voxscribe (macOS Local Transcription Prototype)
+# Kopie (macOS Local Transcription Prototype)
 
 Monochrome macOS transcription tool prototype for recording conversations and producing speaker-labeled transcripts locally.
 
