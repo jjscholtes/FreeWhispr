@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="${VOXSCRIBE_APP_NAME:-FreeWhispr}"
-BUNDLE_ID="${VOXSCRIBE_BUNDLE_ID:-com.jesse.voxscribe}"
-APP_ICON_ICNS="${VOXSCRIBE_APP_ICON_ICNS:-$ROOT/branding/FreeWhispr.icns}"
+APP_NAME="${FREEWHISPR_APP_NAME:-${VOXSCRIBE_APP_NAME:-FreeWhispr}}"
+BUNDLE_ID="${FREEWHISPR_BUNDLE_ID:-${VOXSCRIBE_BUNDLE_ID:-com.jesse.voxscribe}}"
+APP_ICON_ICNS="${FREEWHISPR_APP_ICON_ICNS:-${VOXSCRIBE_APP_ICON_ICNS:-$ROOT/branding/FreeWhispr.icns}}"
 APP_PKG_PATH="$ROOT/app"
 DIST_DIR="$ROOT/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
@@ -17,9 +17,9 @@ ZIP_PATH="$DIST_DIR/${APP_NAME}.zip"
 DMG_PATH="$DIST_DIR/${APP_NAME}.dmg"
 DMG_STAGE_DIR="$DIST_DIR/.dmg-stage-${APP_NAME}"
 SKIP_BUILD=0
-WORKER_VENV_PATH="${VOXSCRIBE_WORKER_VENV_PATH:-}"
-SIGN_IDENTITY="${VOXSCRIBE_CODESIGN_IDENTITY:-}"
-NOTARY_PROFILE="${VOXSCRIBE_NOTARY_PROFILE:-}"
+WORKER_VENV_PATH="${FREEWHISPR_WORKER_VENV_PATH:-${VOXSCRIBE_WORKER_VENV_PATH:-}}"
+SIGN_IDENTITY="${FREEWHISPR_CODESIGN_IDENTITY:-${VOXSCRIBE_CODESIGN_IDENTITY:-}}"
+NOTARY_PROFILE="${FREEWHISPR_NOTARY_PROFILE:-${VOXSCRIBE_NOTARY_PROFILE:-}}"
 
 usage() {
   cat <<EOF
@@ -34,12 +34,14 @@ Options:
   --bundle-id <id>             Override CFBundleIdentifier (default: $BUNDLE_ID)
   --help                       Show this help
 
-Environment overrides:
-  VOXSCRIBE_WORKER_PYTHON       Runtime override for local testing (not baked into bundle)
-  VOXSCRIBE_BUNDLE_ID           Default bundle identifier
-  VOXSCRIBE_CODESIGN_IDENTITY   Default codesign identity
-  VOXSCRIBE_NOTARY_PROFILE      Default notarytool keychain profile
-  VOXSCRIBE_WORKER_VENV_PATH    Default path for --worker-venv
+Environment overrides (preferred names):
+  FREEWHISPR_WORKER_PYTHON       Runtime override for local testing (not baked into bundle)
+  FREEWHISPR_BUNDLE_ID           Default bundle identifier
+  FREEWHISPR_CODESIGN_IDENTITY   Default codesign identity
+  FREEWHISPR_NOTARY_PROFILE      Default notarytool keychain profile
+  FREEWHISPR_WORKER_VENV_PATH    Default path for --worker-venv
+
+Legacy compatibility env names with VOXSCRIBE_* prefixes are still accepted.
 EOF
 }
 
@@ -223,5 +225,5 @@ echo
 echo "Bundle ready: $APP_BUNDLE"
 echo "Archive:      $ZIP_PATH"
 echo "DMG:          $DMG_PATH"
-echo "Worker path in bundle: Contents/Resources/worker/voxscribe_worker.py"
+echo "Worker entrypoint in bundle: Contents/Resources/worker/<internal worker script>"
 echo "Optional bundled runtime path: Contents/Resources/worker_runtime/bin/python3"

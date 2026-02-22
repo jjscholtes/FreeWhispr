@@ -1,4 +1,4 @@
 {"type":"request","requestId":"r1","command":"health_check","payload":{}}
-{"type":"response","requestId":"r1","command":"health_check","payload":{"status":"ok","service":"voxscribe-worker","pipelineVersion":"0.1.0","pid":12345}}
+{"type":"response","requestId":"r1","command":"health_check","payload":{"status":"ok","service":"freewhispr-worker","pipelineVersion":"0.1.0","pid":12345}}
 {"type":"request","requestId":"r2","command":"validate_setup","payload":{}}
 {"type":"response","requestId":"r2","command":"validate_setup","payload":{"status":"needs_setup","dependencies":{"fasterWhisperAvailable":false,"pyannoteAvailable":false},"diarizationTokenPresent":false}}

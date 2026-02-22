@@ -41,7 +41,7 @@ def run(stdin: Any = None) -> int:
             "worker_boot",
             {
                 "event": "worker_ready",
-                "service": "voxscribe-worker",
+                "service": "freewhispr-worker",
                 "pid": os.getpid(),
                 "session": str(uuid.uuid4()),
             },

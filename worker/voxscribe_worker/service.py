@@ -56,7 +56,7 @@ class WorkerService:
                     command,
                     {
                         "status": "ok",
-                        "service": "voxscribe-worker",
+                        "service": "freewhispr-worker",
                         "pipelineVersion": PIPELINE_VERSION,
                         "pid": os.getpid(),
                     },

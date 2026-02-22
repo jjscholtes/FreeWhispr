@@ -1,4 +1,4 @@
-# Voxscribe Worker
+# FreeWhispr Worker
 
 Local Python sidecar worker for transcription, diarization, transcript reconciliation, and exports.
 
@@ -11,7 +11,7 @@ Local Python sidecar worker for transcription, diarization, transcript reconcili
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r worker/requirements.txt
-python -m voxscribe_worker
+python worker/voxscribe_worker.py
 ```
 
 ## Notes
