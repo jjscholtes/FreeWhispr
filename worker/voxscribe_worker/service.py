@@ -74,6 +74,20 @@ class WorkerService:
             self._emit(envelope("response", request_id, command, pipeline.validate_setup()))
             return
 
+        if command == "warm_up_models":
+            pipeline = ProcessingPipeline(PipelineContext(cancel_requested=lambda: False))
+            profile = str(payload.get("profile", "fast"))
+            include_diarization = bool(payload.get("includeDiarization", True))
+            self._emit(
+                envelope(
+                    "response",
+                    request_id,
+                    command,
+                    pipeline.warm_up_models(profile=profile, include_diarization=include_diarization),
+                )
+            )
+            return
+
         if command == "cancel_job":
             current = self._get_current_job()
             if current is None:

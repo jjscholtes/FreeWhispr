@@ -65,6 +65,13 @@ enum ProcessingProfile: String, Codable, CaseIterable, Sendable, Identifiable {
 
     var label: String {
         switch self {
+        case .fast: return "Fast (large-v3-turbo)"
+        case .best: return "Best (large-v3)"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
         case .fast: return "Fast"
         case .best: return "Best"
         }
@@ -89,6 +96,45 @@ enum ASRBackend: String, Codable, CaseIterable, Sendable, Identifiable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(Self.whisperCpp.rawValue)
+    }
+}
+
+enum WhisperCppTuningPreset: String, Codable, CaseIterable, Sendable, Identifiable {
+    case automatic
+    case m4ProFast
+    case m4ProBalanced
+    case m4ProAccuracy
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .m4ProFast: return "M4 Pro Fast"
+        case .m4ProBalanced: return "M4 Pro Balanced"
+        case .m4ProAccuracy: return "M4 Pro Accuracy"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+struct WhisperCppTuningConfig: Codable, Sendable, Equatable {
+    var preset: WhisperCppTuningPreset
+    var customThreads: Int?
+    var customBeamSize: Int?
+    var customBestOf: Int?
+
+    init(
+        preset: WhisperCppTuningPreset = .automatic,
+        customThreads: Int? = nil,
+        customBeamSize: Int? = nil,
+        customBestOf: Int? = nil
+    ) {
+        self.preset = preset
+        self.customThreads = customThreads
+        self.customBeamSize = customBeamSize
+        self.customBestOf = customBestOf
     }
 }
 
@@ -225,7 +271,7 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
 }
 
 struct AppSettings: Codable, Sendable, Equatable {
-    static let schemaVersion = 5
+    static let schemaVersion = 6
 
     var schemaVersion: Int = AppSettings.schemaVersion
     var defaultLanguageMode: LanguageMode
@@ -235,6 +281,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     var enableMockPipeline: Bool
     var diarizationEnabledByDefault: Bool
     var customFolders: [SessionFolder]
+    var whisperCppTuning: WhisperCppTuningConfig
 
     init(
         schemaVersion: Int = AppSettings.schemaVersion,
@@ -244,7 +291,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         workerScriptPath: String?,
         enableMockPipeline: Bool,
         diarizationEnabledByDefault: Bool,
-        customFolders: [SessionFolder] = []
+        customFolders: [SessionFolder] = [],
+        whisperCppTuning: WhisperCppTuningConfig = .init()
     ) {
         self.schemaVersion = schemaVersion
         self.defaultLanguageMode = defaultLanguageMode
@@ -254,6 +302,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         self.enableMockPipeline = enableMockPipeline
         self.diarizationEnabledByDefault = diarizationEnabledByDefault
         self.customFolders = customFolders
+        self.whisperCppTuning = whisperCppTuning
     }
 
     enum CodingKeys: String, CodingKey {
@@ -265,6 +314,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         case enableMockPipeline
         case diarizationEnabledByDefault
         case customFolders
+        case whisperCppTuning
     }
 
     init(from decoder: Decoder) throws {
@@ -277,6 +327,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         enableMockPipeline = try container.decodeIfPresent(Bool.self, forKey: .enableMockPipeline) ?? false
         diarizationEnabledByDefault = try container.decodeIfPresent(Bool.self, forKey: .diarizationEnabledByDefault) ?? true
         customFolders = try container.decodeIfPresent([SessionFolder].self, forKey: .customFolders) ?? []
+        whisperCppTuning = try container.decodeIfPresent(WhisperCppTuningConfig.self, forKey: .whisperCppTuning) ?? .init()
     }
 
     static let `default` = AppSettings(
@@ -286,6 +337,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         workerScriptPath: nil,
         enableMockPipeline: false,
         diarizationEnabledByDefault: true,
-        customFolders: []
+        customFolders: [],
+        whisperCppTuning: .init()
     )
 }

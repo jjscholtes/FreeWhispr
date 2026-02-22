@@ -440,12 +440,15 @@ private struct IdleStageView: View {
                             CapsLabel(text: "Mode")
                             Picker("Mode", selection: $viewModel.settings.defaultProfile) {
                                 ForEach(ProcessingProfile.allCases) { profile in
-                                    Text(profile.label).tag(profile)
+                                    Text(profile.shortLabel).tag(profile)
                                 }
                             }
                             .labelsHidden()
                             .pickerStyle(.segmented)
                         }
+                        Text("Fast uses large-v3-turbo. Best uses large-v3.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DS.ColorToken.fgSecondary)
                         Toggle("Enable diarization", isOn: $viewModel.settings.diarizationEnabledByDefault)
                             .toggleStyle(.checkbox)
                         Button("Save defaults") { viewModel.saveSettings() }
@@ -615,6 +618,10 @@ private struct ProcessingStageView: View {
                             Button("Retry") { viewModel.retryProcessing() }
                                 .dsProminentButton()
                                 .tint(.black)
+                            if viewModel.canRetrySpeakerSeparationOnly {
+                                Button("Retry Speaker Split Only") { viewModel.retrySpeakerSeparationOnly() }
+                                    .dsSecondaryButton()
+                            }
                             if lastError.code == "DIARIZATION_AUTH_REQUIRED"
                                 || lastError.code == "MODEL_NOT_INSTALLED"
                                 || lastError.message.localizedCaseInsensitiveContains("hugging face")
@@ -776,6 +783,10 @@ private struct TranscriptStageView: View {
                     Button("Rename Session…") { viewModel.promptRenameSession(manifest) }
                         .dsSecondaryButton()
                     MoveToFolderMenuButton(viewModel: viewModel, manifest: manifest)
+                    if viewModel.canRetrySpeakerSeparationOnly {
+                        Button("Retry Speaker Split") { viewModel.retrySpeakerSeparationOnly() }
+                            .dsSecondaryButton()
+                    }
                 }
             }
 
@@ -1298,6 +1309,10 @@ private struct SettingsView: View {
                                     Text(profile.label).tag(profile)
                                 }
                             }
+                            Text("Profile mapping: Fast = large-v3-turbo, Best = large-v3.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(DS.ColorToken.fgSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             HStack {
                                 Text("ASR Engine")
                                 Spacer()

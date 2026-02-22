@@ -130,6 +130,8 @@ class JobRequest:
     speakerHints: dict[str, int] | None = None
     wordTimestamps: bool = True
     mockMode: bool = False
+    diarizationOnly: bool = False
+    transcriptPath: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "JobRequest":
@@ -146,6 +148,8 @@ class JobRequest:
             speakerHints=payload.get("speakerHints"),
             wordTimestamps=bool(payload.get("wordTimestamps", True)),
             mockMode=bool(payload.get("mockMode", False)),
+            diarizationOnly=bool(payload.get("diarizationOnly", False)),
+            transcriptPath=(str(payload["transcriptPath"]) if payload.get("transcriptPath") is not None else None),
         )
 
 

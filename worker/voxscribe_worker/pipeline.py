@@ -9,13 +9,24 @@ import os
 import random
 import shutil
 import subprocess
+import tempfile
 import time
 import wave
 from typing import Callable, Any
 
-from .models import TranscriptSegment, WordToken, BackendInfo, WorkerError, JobRequest
+from .models import (
+    TranscriptSegment,
+    WordToken,
+    BackendInfo,
+    WorkerError,
+    JobRequest,
+    Speaker,
+    TranscriptDocument,
+    SCHEMA_VERSION,
+    now_ms,
+)
 from .reconcile import SpeakerTurn, build_transcript_document
-from .exports import write_exports
+from .exports import write_exports, write_json_export
 
 
 ProgressCallback = Callable[[str, float, str], None]
@@ -27,6 +38,7 @@ _WHISPERCPP_LANG_RE = re.compile(r"\blang\s*=\s*([a-z]{2,8})\b", re.IGNORECASE)
 _WHISPERCPP_SPECIAL_TOKEN_RE = re.compile(r"^\[[^\]]+\]$")
 
 _PYANNOTE_PIPELINE_CACHE: dict[str, Any] = {}
+_WHISPERCPP_DISABLE_GPU_AFTER_FAILURE = False
 
 
 def _parse_hms_ms(value: str) -> int:
@@ -254,6 +266,102 @@ def _looks_like_whispercpp_metal_alloc_error(stderr: str, stdout: str) -> bool:
     )
 
 
+def _backend_info_from_dict(data: Any) -> BackendInfo | None:
+    if not isinstance(data, dict):
+        return None
+    name = str(data.get("name", "")).strip()
+    if not name:
+        return None
+    version = str(data["version"]) if data.get("version") is not None else None
+    model = str(data["model"]) if data.get("model") is not None else None
+    metadata_raw = data.get("metadata")
+    metadata: dict[str, Any] | None = None
+    if isinstance(metadata_raw, dict):
+        metadata = {str(k): v for k, v in metadata_raw.items()}
+    return BackendInfo(name=name, version=version, model=model, metadata=metadata)
+
+
+def _load_existing_transcript_document(path: Path) -> TranscriptDocument:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    speakers: list[Speaker] = []
+    for item in raw.get("speakers", []) or []:
+        if not isinstance(item, dict):
+            continue
+        speakers.append(
+            Speaker(
+                id=str(item.get("id", "")),
+                defaultLabel=str(item.get("defaultLabel", item.get("displayName") or "Speaker")),
+                displayName=(str(item["displayName"]) if item.get("displayName") is not None else None),
+                colorHex=str(item.get("colorHex", "#111111")),
+                isUserEdited=bool(item.get("isUserEdited", False)),
+            )
+        )
+
+    segments: list[TranscriptSegment] = []
+    for item in raw.get("segments", []) or []:
+        if not isinstance(item, dict):
+            continue
+        words_raw = item.get("words")
+        words: list[WordToken] | None = None
+        if isinstance(words_raw, list):
+            parsed_words: list[WordToken] = []
+            for token in words_raw:
+                if not isinstance(token, dict):
+                    continue
+                parsed_words.append(
+                    WordToken(
+                        startMs=int(token.get("startMs", 0)),
+                        endMs=int(token.get("endMs", 0)),
+                        text=str(token.get("text", "")),
+                        probability=(float(token["probability"]) if token.get("probability") is not None else None),
+                        speakerId=(str(token["speakerId"]) if token.get("speakerId") is not None else None),
+                    )
+                )
+            words = parsed_words
+        segments.append(
+            TranscriptSegment(
+                id=str(item.get("id", f"seg_{len(segments)}")),
+                startMs=int(item.get("startMs", 0)),
+                endMs=int(item.get("endMs", 0)),
+                speakerId=(str(item["speakerId"]) if item.get("speakerId") is not None else None),
+                text=str(item.get("text", "")),
+                confidence=(float(item["confidence"]) if item.get("confidence") is not None else None),
+                speakerConfidence=(float(item["speakerConfidence"]) if item.get("speakerConfidence") is not None else None),
+                source=str(item.get("source", "machine")),
+                words=words,
+            )
+        )
+
+    stats = raw.get("stats")
+    stats_dict = stats if isinstance(stats, dict) else {}
+
+    return TranscriptDocument(
+        sessionId=str(raw.get("sessionId", "")),
+        speakers=speakers,
+        segments=segments,
+        sourceLanguage=(str(raw["sourceLanguage"]) if raw.get("sourceLanguage") is not None else None),
+        transcriptionBackend=_backend_info_from_dict(raw.get("transcriptionBackend")),
+        diarizationBackend=_backend_info_from_dict(raw.get("diarizationBackend")),
+        stats={str(k): v for k, v in stats_dict.items()},
+        schemaVersion=int(raw.get("schemaVersion", SCHEMA_VERSION)),
+        createdAt=int(raw.get("createdAt", now_ms())),
+        updatedAt=int(raw.get("updatedAt", now_ms())),
+    )
+
+
+def _preserve_speaker_labels(previous: TranscriptDocument, updated: TranscriptDocument) -> None:
+    by_id = {speaker.id: speaker for speaker in previous.speakers}
+    by_default = {speaker.defaultLabel: speaker for speaker in previous.speakers}
+    for speaker in updated.speakers:
+        source = by_id.get(speaker.id) or by_default.get(speaker.defaultLabel)
+        if source is None:
+            continue
+        speaker.displayName = source.displayName
+        speaker.isUserEdited = source.isUserEdited
+        if source.colorHex:
+            speaker.colorHex = source.colorHex
+
+
 def _resolve_whispercpp_threads(profile: str) -> int:
     raw = os.environ.get("FREEWHISPR_WHISPERCPP_THREADS") or os.environ.get("WHISPERCPP_THREADS")
     if raw:
@@ -304,6 +412,16 @@ def _get_pyannote_pipeline(token: str):
 def _read_wav_duration_ms(path: Path) -> int | None:
     if not path.exists() or path.suffix.lower() != ".wav":
         return None
+
+
+def _write_silence_wav(path: Path, duration_ms: int = 900, sample_rate: int = 16000) -> None:
+    frames = max(1, int(sample_rate * (duration_ms / 1000.0)))
+    silence = b"\x00\x00" * frames  # 16-bit mono PCM silence
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(silence)
     try:
         with wave.open(str(path), "rb") as wav:
             frames = wav.getnframes()
@@ -437,12 +555,76 @@ class ProcessingPipeline:
             },
         }
 
+    def warm_up_models(self, profile: str = "fast", include_diarization: bool = True) -> dict[str, Any]:
+        started = time.perf_counter()
+        asr_info: dict[str, Any] = {"requested": True, "ok": False}
+        diar_info: dict[str, Any] = {"requested": bool(include_diarization), "ok": False}
+        warnings: list[str] = []
+
+        normalized_profile = profile if profile in {"fast", "best"} else "fast"
+        asr_model = "turbo" if normalized_profile == "fast" else "large-v3"
+
+        with tempfile.TemporaryDirectory(prefix="freewhispr-warmup-") as temp_dir:
+            temp_root = Path(temp_dir)
+            audio_path = temp_root / "warmup.wav"
+            output_dir = temp_root / "out"
+            _write_silence_wav(audio_path)
+
+            try:
+                _, _, backend = self._real_transcribe(
+                    JobRequest(
+                        jobId="warmup",
+                        sessionId="warmup",
+                        audioPath=str(audio_path),
+                        outputDir=str(output_dir),
+                        languageMode="en",
+                        profile=normalized_profile,
+                        asrBackend="whisper.cpp",
+                        asrModel=asr_model,
+                        diarizationEnabled=False,
+                        wordTimestamps=False,
+                        mockMode=False,
+                    )
+                )
+                asr_info["ok"] = True
+                asr_info["backend"] = backend.to_dict()
+            except Exception as exc:
+                asr_info["error"] = str(exc)
+
+        if include_diarization:
+            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+            if not token:
+                diar_info["error"] = "HF token missing"
+            elif not _python_module_available("pyannote.audio"):
+                diar_info["error"] = "pyannote.audio missing"
+            else:
+                diar_started = time.perf_counter()
+                try:
+                    _get_pyannote_pipeline(token)
+                    diar_info["ok"] = True
+                    diar_info["durationSec"] = round(time.perf_counter() - diar_started, 4)
+                except Exception as exc:
+                    diar_info["error"] = str(exc)
+
+        if _WHISPERCPP_DISABLE_GPU_AFTER_FAILURE:
+            warnings.append("whisper.cpp GPU fallback cache is active (CPU will be used until worker restart)")
+
+        return {
+            "status": "ok" if asr_info.get("ok") else "partial",
+            "profile": normalized_profile,
+            "asr": asr_info,
+            "diarization": diar_info,
+            "durationSec": round(time.perf_counter() - started, 4),
+            "warnings": warnings,
+        }
+
     def _real_transcribe(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
         # `asrBackend` is still accepted in payloads for compatibility, but FreeWhispr now
         # standardizes on whisper.cpp and routes all ASR through this backend.
         return self._real_transcribe_whispercpp(request)
 
     def _real_transcribe_whispercpp(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
+        global _WHISPERCPP_DISABLE_GPU_AFTER_FAILURE
         binary = _resolve_whispercpp_binary()
         if binary is None:
             raise RuntimeError("MISSING_WHISPERCPP_BINARY")
@@ -478,7 +660,10 @@ class ProcessingPipeline:
             pass
         base_cmd.extend(["-oj", "-ojf", "-of", str(json_prefix)])
 
-        force_no_gpu = os.environ.get("FREEWHISPR_WHISPERCPP_NO_GPU", "0") == "1"
+        force_no_gpu = (
+            os.environ.get("FREEWHISPR_WHISPERCPP_NO_GPU", "0") == "1"
+            or _WHISPERCPP_DISABLE_GPU_AFTER_FAILURE
+        )
 
         def run_whisper(use_gpu: bool) -> subprocess.CompletedProcess[str]:
             cmd = list(base_cmd)
@@ -499,6 +684,7 @@ class ProcessingPipeline:
             # Automatic fallback for Metal allocation failures on some devices / memory pressure scenarios.
             run = run_whisper(use_gpu=False)
             used_gpu = False
+            _WHISPERCPP_DISABLE_GPU_AFTER_FAILURE = True
 
         if run.returncode != 0:
             raise RuntimeError(
@@ -642,31 +828,47 @@ class ProcessingPipeline:
             else:
                 emit("preparing", 0.05, "Preparing job")
                 self._check_cancel()
-
-                emit("transcribing", 0.12, f"Loading Whisper model ({request.asrModel})")
-                self._check_cancel()
-                segments, detected_language, asr_backend = timed("transcribing", lambda: self._real_transcribe(request))
-                emit("transcribing", 0.55, "Transcription complete")
-                self._check_cancel()
+                if request.diarizationOnly:
+                    if not request.transcriptPath:
+                        raise RuntimeError("DIARIZATION_RETRY_REQUIRES_TRANSCRIPT")
+                    transcript_path = Path(request.transcriptPath)
+                    if not transcript_path.exists():
+                        raise RuntimeError(f"TRANSCRIPT_NOT_FOUND:{transcript_path}")
+                    emit("preparing", 0.12, "Loading existing transcript")
+                    self._check_cancel()
+                    existing_document = timed("load_transcript", lambda: _load_existing_transcript_document(transcript_path))
+                    segments = existing_document.segments
+                    detected_language = existing_document.sourceLanguage
+                    asr_backend = existing_document.transcriptionBackend or BackendInfo(name="whisper.cpp", model=request.asrModel)
+                    emit("transcribing", 0.55, "Using existing transcript")
+                    self._check_cancel()
+                else:
+                    emit("transcribing", 0.12, f"Loading Whisper model ({request.asrModel})")
+                    self._check_cancel()
+                    segments, detected_language, asr_backend = timed("transcribing", lambda: self._real_transcribe(request))
+                    emit("transcribing", 0.55, "Transcription complete")
+                    self._check_cancel()
+                    existing_document = None
 
                 turns: list[SpeakerTurn] = []
                 diar_backend = None
                 if request.diarizationEnabled:
-                    emit("reconciling", 0.58, "Preparing transcript preview")
-                    self._check_cancel()
-                    interim_document = timed(
-                        "reconciling_preview",
-                        lambda: build_transcript_document(
-                            session_id=request.sessionId,
-                            segments=segments,
-                            turns=[],
-                            detected_language=detected_language,
-                            asr_backend=asr_backend,
-                            diar_backend=None,
-                        ),
-                    )
-                    timed("preview_exports", lambda: write_exports(interim_document, transcript_dir))
-                    emit("diarizing", 0.6, "Transcript ready — continuing speaker separation")
+                    if not request.diarizationOnly:
+                        emit("reconciling", 0.58, "Preparing transcript preview")
+                        self._check_cancel()
+                        interim_document = timed(
+                            "reconciling_preview",
+                            lambda: build_transcript_document(
+                                session_id=request.sessionId,
+                                segments=segments,
+                                turns=[],
+                                detected_language=detected_language,
+                                asr_backend=asr_backend,
+                                diar_backend=None,
+                            ),
+                        )
+                        timed("preview_exports", lambda: write_json_export(interim_document, transcript_dir))
+                        emit("diarizing", 0.6, "Transcript ready — continuing speaker separation")
                     emit("diarizing", 0.62, "Loading diarization model")
                     self._check_cancel()
                     turns, diar_backend = timed("diarizing", lambda: self._real_diarize(request))
@@ -687,6 +889,8 @@ class ProcessingPipeline:
                         diar_backend=diar_backend,
                     ),
                 )
+                if request.diarizationOnly and existing_document is not None:
+                    _preserve_speaker_labels(existing_document, document)
                 result = {"document": document}
 
             emit("writing_output", 0.94, "Writing transcript files")
@@ -753,6 +957,17 @@ class ProcessingPipeline:
                 )
             if msg == "DIARIZATION_AUTH_REQUIRED":
                 raise WorkerExecutionError("DIARIZATION_AUTH_REQUIRED", "Hugging Face token is required for diarization")
+            if msg == "DIARIZATION_RETRY_REQUIRES_TRANSCRIPT":
+                raise WorkerExecutionError(
+                    "DIARIZATION_RETRY_REQUIRES_TRANSCRIPT",
+                    "Retrying speaker separation requires an existing transcript file",
+                )
+            if msg.startswith("TRANSCRIPT_NOT_FOUND:"):
+                raise WorkerExecutionError(
+                    "TRANSCRIPT_NOT_FOUND",
+                    "Existing transcript file was not found for speaker separation retry",
+                    {"raw": msg},
+                )
             raise
 
 

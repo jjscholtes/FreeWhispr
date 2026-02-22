@@ -64,3 +64,9 @@ def write_exports(document: TranscriptDocument, transcript_dir: Path) -> dict[st
         "srt": str(srt_path),
     }
 
+
+def write_json_export(document: TranscriptDocument, transcript_dir: Path) -> str:
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    json_path = transcript_dir / "transcript.json"
+    json_path.write_text(document.to_json(), encoding="utf-8")
+    return str(json_path)

@@ -24,6 +24,14 @@ struct ProcessingJobOutput: Sendable {
     var detectedLanguage: String?
 }
 
+struct WorkerWarmupStatus: Sendable, Equatable {
+    var status: String
+    var durationSec: Double
+    var asrOK: Bool
+    var diarizationOK: Bool
+    var warnings: [String]
+}
+
 enum ProcessingCoordinatorError: LocalizedError {
     case workerNotFound(URL)
     case invalidWorkerMessage
@@ -159,9 +167,11 @@ actor ProcessingCoordinator {
         settings: AppSettings,
         diarizationToken: String?,
         workerScriptPath: String?,
+        diarizationOnly: Bool = false,
+        transcriptPath: URL? = nil,
         onProgress: (@Sendable (ProcessingProgressEvent) -> Void)?
     ) async throws -> ProcessingJobOutput {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "jobId": UUID().uuidString,
             "sessionId": manifest.id.uuidString,
             "audioPath": audioPath.path,
@@ -173,7 +183,11 @@ actor ProcessingCoordinator {
             "diarizationEnabled": manifest.modelConfig.diarizationEnabled,
             "wordTimestamps": true,
             "mockMode": settings.enableMockPipeline,
+            "diarizationOnly": diarizationOnly,
         ]
+        if let transcriptPath {
+            payload["transcriptPath"] = transcriptPath.path
+        }
 
         let response = try await runSingleCommand(
             projectRoot: projectRoot,
@@ -196,6 +210,36 @@ actor ProcessingCoordinator {
             metricsPath: payload["metricsPath"] as? String,
             exportPaths: payload["exportPaths"] as? [String: String] ?? [:],
             detectedLanguage: payload["detectedLanguage"] as? String
+        )
+    }
+
+    func warmUpModels(
+        projectRoot: URL,
+        profile: ProcessingProfile,
+        includeDiarization: Bool,
+        diarizationToken: String?,
+        workerScriptPath: String?
+    ) async throws -> WorkerWarmupStatus {
+        let response = try await runSingleCommand(
+            projectRoot: projectRoot,
+            command: "warm_up_models",
+            payload: [
+                "profile": profile.rawValue,
+                "includeDiarization": includeDiarization,
+            ],
+            diarizationToken: diarizationToken,
+            workerScriptPath: workerScriptPath,
+            onProgress: nil
+        )
+        guard let payload = response["payload"] as? [String: Any] else { throw ProcessingCoordinatorError.invalidWorkerMessage }
+        let asr = payload["asr"] as? [String: Any] ?? [:]
+        let diar = payload["diarization"] as? [String: Any] ?? [:]
+        return WorkerWarmupStatus(
+            status: payload["status"] as? String ?? "unknown",
+            durationSec: payload["durationSec"] as? Double ?? 0,
+            asrOK: asr["ok"] as? Bool ?? false,
+            diarizationOK: diar["ok"] as? Bool ?? false,
+            warnings: payload["warnings"] as? [String] ?? []
         )
     }
 

@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    enum ProcessingRunMode: Equatable {
+        case full
+        case diarizationOnly
+    }
+
     enum SessionShelfFilter: String, CaseIterable, Identifiable {
         case all
         case active
@@ -87,6 +92,9 @@ final class AppViewModel: ObservableObject {
     private var processingTask: Task<Void, Never>?
     private var deferredSpeakerRenamePersistTask: Task<Void, Never>?
     private var interimTranscriptShownForSessions = Set<UUID>()
+    private var lastProgressPersistAt: [UUID: Date] = [:]
+    private var lastProgressPersistStage: [UUID: ProcessingStage] = [:]
+    private var lastProgressPersistProgressBucket: [UUID: Int] = [:]
     private static let lastExportFolderDefaultsKey = "voxscribe.lastExportFolderPath"
 
     init() {
@@ -405,12 +413,15 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func startProcessing(sessionId: UUID) {
+    func startProcessing(sessionId: UUID, mode: ProcessingRunMode = .full) {
         processingTask?.cancel()
         processingProgress = nil
         errorMessage = nil
         errorTechnicalDetails = nil
         interimTranscriptShownForSessions.remove(sessionId)
+        lastProgressPersistAt[sessionId] = nil
+        lastProgressPersistStage[sessionId] = nil
+        lastProgressPersistProgressBucket[sessionId] = nil
 
         processingTask = Task { @MainActor in
             do {
@@ -418,6 +429,7 @@ final class AppViewModel: ObservableObject {
                 let audioURL = await sessionStore.audioFileURL(for: manifest)
                 let outputDir = await sessionStore.sessionDirectory(for: sessionId)
                 let expectsDiarization = manifest.modelConfig.diarizationEnabled
+                let transcriptPathForRetry = (mode == .diarizationOnly) ? await sessionStore.transcriptJSONURL(for: sessionId) : nil
 
                 _ = try await mutateManifest(sessionId: sessionId) {
                     $0.processingState = .running
@@ -435,20 +447,14 @@ final class AppViewModel: ObservableObject {
                     settings: settings,
                     diarizationToken: normalizedDiarizationToken,
                     workerScriptPath: settings.workerScriptPath,
+                    diarizationOnly: mode == .diarizationOnly,
+                    transcriptPath: transcriptPathForRetry,
                     onProgress: { [weak self] event in
                         Task { @MainActor [weak self] in
                             guard let self else { return }
                             self.processingProgress = event
-                            do {
-                                _ = try await self.mutateManifest(sessionId: sessionId) {
-                                    $0.processingState = .running
-                                    $0.processingStage = event.stage
-                                    $0.processingProgress = event.progress
-                                }
-                                await self.reloadSessions()
-                            } catch {
-                                self.showError(error.localizedDescription)
-                            }
+                            self.applyProcessingProgressLocally(sessionId: sessionId, event: event)
+                            await self.persistProcessingProgressIfNeeded(sessionId: sessionId, event: event)
                             if expectsDiarization,
                                self.shouldTryPresentInterimTranscript(for: sessionId, from: event)
                             {
@@ -475,7 +481,7 @@ final class AppViewModel: ObservableObject {
                 currentTranscript = transcript
                 transcriptSaveState = .saved(Date())
                 stage = .transcript(sessionId)
-                showInfo("Transcript ready")
+                showInfo(mode == .diarizationOnly ? "Speaker separation updated" : "Transcript ready")
             } catch is CancellationError {
                 showInfo("Processing cancelled.")
             } catch let error as ProcessingCoordinatorError {
@@ -530,10 +536,32 @@ final class AppViewModel: ObservableObject {
 
     func retryProcessing() {
         if case let .processing(sessionId) = stage {
-            startProcessing(sessionId: sessionId)
+            startProcessing(sessionId: sessionId, mode: .full)
         } else if let sessionId = selectedSessionID {
             stage = .processing(sessionId)
-            startProcessing(sessionId: sessionId)
+            startProcessing(sessionId: sessionId, mode: .full)
+        }
+    }
+
+    func retrySpeakerSeparationOnly() {
+        guard let manifest = selectedManifest else { return }
+        guard manifest.modelConfig.diarizationEnabled else {
+            showError("Speaker separation is disabled for this session.")
+            return
+        }
+        Task { @MainActor in
+            let transcriptExists: Bool
+            if currentTranscript != nil {
+                transcriptExists = true
+            } else {
+                transcriptExists = await sessionStore.transcriptExists(sessionId: manifest.id)
+            }
+            guard transcriptExists else {
+                showError("No transcript found to reuse. Run a full transcription first.")
+                return
+            }
+            stage = .processing(manifest.id)
+            startProcessing(sessionId: manifest.id, mode: .diarizationOnly)
         }
     }
 
@@ -981,6 +1009,50 @@ final class AppViewModel: ObservableObject {
         Task { @MainActor in
             let dir = await sessionStore.processingDirectory(for: sessionId)
             NSWorkspace.shared.activateFileViewerSelecting([dir])
+        }
+    }
+
+    var canRetrySpeakerSeparationOnly: Bool {
+        guard let manifest = selectedManifest else { return false }
+        guard manifest.modelConfig.diarizationEnabled else { return false }
+        guard manifest.processingState != .running && manifest.processingState != .queued else { return false }
+        return currentTranscript != nil
+    }
+
+    private func applyProcessingProgressLocally(sessionId: UUID, event: ProcessingProgressEvent) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[index].processingState = .running
+        sessions[index].processingStage = event.stage
+        sessions[index].processingProgress = event.progress
+        sessions[index].lastError = nil
+    }
+
+    private func shouldPersistProcessingProgress(sessionId: UUID, event: ProcessingProgressEvent, now: Date = Date()) -> Bool {
+        let stageChanged = lastProgressPersistStage[sessionId] != event.stage
+        let bucket = Int((event.progress * 100).rounded(.down))
+        let lastBucket = lastProgressPersistProgressBucket[sessionId] ?? -100
+        let bucketAdvanced = bucket >= lastBucket + 5
+        let timeElapsed = now.timeIntervalSince(lastProgressPersistAt[sessionId] ?? .distantPast)
+        let timedFlush = timeElapsed >= 1.0
+        let nearEnd = event.progress >= 0.99
+        return stageChanged || bucketAdvanced || timedFlush || nearEnd
+    }
+
+    private func persistProcessingProgressIfNeeded(sessionId: UUID, event: ProcessingProgressEvent) async {
+        let now = Date()
+        guard shouldPersistProcessingProgress(sessionId: sessionId, event: event, now: now) else { return }
+        do {
+            _ = try await mutateManifest(sessionId: sessionId) {
+                $0.processingState = .running
+                $0.processingStage = event.stage
+                $0.processingProgress = event.progress
+                $0.lastError = nil
+            }
+            lastProgressPersistAt[sessionId] = now
+            lastProgressPersistStage[sessionId] = event.stage
+            lastProgressPersistProgressBucket[sessionId] = Int((event.progress * 100).rounded(.down))
+        } catch {
+            showError(error.localizedDescription)
         }
     }
 
