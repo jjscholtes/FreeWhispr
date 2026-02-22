@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="${VOXSCRIBE_APP_NAME:-Kopie}"
+APP_NAME="${VOXSCRIBE_APP_NAME:-FreeWhispr}"
 BUNDLE_ID="${VOXSCRIBE_BUNDLE_ID:-com.jesse.voxscribe}"
-APP_ICON_ICNS="${VOXSCRIBE_APP_ICON_ICNS:-$ROOT/branding/Kopie.icns}"
+APP_ICON_ICNS="${VOXSCRIBE_APP_ICON_ICNS:-$ROOT/branding/FreeWhispr.icns}"
 APP_PKG_PATH="$ROOT/app"
 DIST_DIR="$ROOT/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
@@ -156,7 +156,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Kopie records microphone audio to create local transcripts.</string>
+  <string>FreeWhispr records microphone audio to create local transcripts.</string>
 </dict>
 </plist>
 EOF

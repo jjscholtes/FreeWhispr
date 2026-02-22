@@ -4,12 +4,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Kopie",
+    name: "FreeWhispr",
     platforms: [
         .macOS(.v14),
     ],
     products: [
-        .executable(name: "Kopie", targets: ["Voxscribe"]),
+        .executable(name: "FreeWhispr", targets: ["Voxscribe"]),
     ],
     targets: [
         .executableTarget(

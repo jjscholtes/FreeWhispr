@@ -9,7 +9,7 @@ let outputURL: URL = {
         return URL(fileURLWithPath: args[idx + 1])
     }
     return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appendingPathComponent("tmp/icon-build/Kopie-1024.png")
+        .appendingPathComponent("FreeWhispr-1024.png")
 }()
 
 let canvas: CGFloat = 1024
@@ -53,36 +53,73 @@ NSBezierPath(rect: rect(0, 0, canvas, canvas)).fill()
 
 let black = NSColor(calibratedWhite: 0.04, alpha: 1.0)
 let white = NSColor.white
+let softWhite = NSColor(calibratedWhite: 1.0, alpha: 0.78)
 
 // Rounded-square base.
 black.setFill()
 NSBezierPath(roundedRect: rect(64, 64, 896, 896), xRadius: 220, yRadius: 220).fill()
 
-// Tape spool (left).
-white.setFill()
-NSBezierPath(ovalIn: circleRect(cx: 356, cy: 512, r: 170)).fill()
+// Clear microphone glyph (left): capsule, yoke, stem, base.
+let micCenterX: CGFloat = 304
+let micTopY: CGFloat = 676
+let micCapsuleW: CGFloat = 160
+let micCapsuleH: CGFloat = 250
 
+white.setFill()
+NSBezierPath(
+    roundedRect: rect(micCenterX - micCapsuleW / 2, micTopY - micCapsuleH, micCapsuleW, micCapsuleH),
+    xRadius: micCapsuleW / 2,
+    yRadius: micCapsuleW / 2
+).fill()
+
+// Capsule inner cut to make it read as a mic head, not a plain pill.
 black.setFill()
-NSBezierPath(ovalIn: circleRect(cx: 356, cy: 512, r: 58)).fill()
+NSBezierPath(
+    roundedRect: rect(micCenterX - 34, micTopY - 206, 68, 162),
+    xRadius: 34,
+    yRadius: 34
+).fill()
 
-// Three tape holes around the center to suggest a spool.
-let holeRadius: CGFloat = 36
-let holeOrbit: CGFloat = 92
-for angleDeg in [90.0, 210.0, 330.0] {
-    let radians = angleDeg * .pi / 180
-    let cx = 356 + cos(radians) * holeOrbit
-    let cy = 512 + sin(radians) * holeOrbit
-    NSBezierPath(ovalIn: circleRect(cx: cx, cy: cy, r: holeRadius)).fill()
-}
-
-// Transcript lines (right).
+// Mic grille slit.
 white.setFill()
-NSBezierPath(roundedRect: rect(532, 396, 260, 54), xRadius: 27, yRadius: 27).fill()
-NSBezierPath(roundedRect: rect(532, 482, 184, 54), xRadius: 27, yRadius: 27).fill()
+NSBezierPath(roundedRect: rect(micCenterX - 10, micTopY - 176, 20, 102), xRadius: 10, yRadius: 10).fill()
 
-// Segmented line to hint speaker turns.
-NSBezierPath(roundedRect: rect(532, 568, 90, 54), xRadius: 27, yRadius: 27).fill()
-NSBezierPath(roundedRect: rect(646, 568, 146, 54), xRadius: 27, yRadius: 27).fill()
+// U-yoke (stroke).
+let yoke = NSBezierPath()
+yoke.lineWidth = 22
+yoke.lineCapStyle = .round
+yoke.appendArc(withCenter: NSPoint(x: micCenterX, y: 494), radius: 104, startAngle: 205, endAngle: 335, clockwise: false)
+white.setStroke()
+yoke.stroke()
+
+// Stem + base.
+white.setFill()
+NSBezierPath(roundedRect: rect(micCenterX - 10, 372, 20, 76), xRadius: 10, yRadius: 10).fill()
+NSBezierPath(roundedRect: rect(micCenterX - 74, 340, 148, 18), xRadius: 9, yRadius: 9).fill()
+
+// Tiny record dot accent (top-left) to reinforce "recording".
+softWhite.setFill()
+NSBezierPath(ovalIn: circleRect(cx: 192, cy: 722, r: 16)).fill()
+
+// Transcript lines (right): aligned, readable, and not "crossed out".
+let lineX: CGFloat = 468
+let lineR: CGFloat = 20
+
+softWhite.setFill()
+NSBezierPath(roundedRect: rect(lineX, 670, 264, 20), xRadius: 10, yRadius: 10).fill()
+
+white.setFill()
+NSBezierPath(roundedRect: rect(lineX, 606, 346, 40), xRadius: lineR, yRadius: lineR).fill()
+NSBezierPath(roundedRect: rect(lineX, 550, 292, 40), xRadius: lineR, yRadius: lineR).fill()
+
+// One split row to suggest turns, but keep clean spacing.
+NSBezierPath(roundedRect: rect(lineX, 494, 122, 40), xRadius: lineR, yRadius: lineR).fill()
+NSBezierPath(roundedRect: rect(lineX + 138, 494, 208, 40), xRadius: lineR, yRadius: lineR).fill()
+
+NSBezierPath(roundedRect: rect(lineX, 438, 330, 40), xRadius: lineR, yRadius: lineR).fill()
+
+softWhite.setFill()
+NSBezierPath(roundedRect: rect(lineX, 386, 222, 20), xRadius: 10, yRadius: 10).fill()
 
 NSGraphicsContext.restoreGraphicsState()
 

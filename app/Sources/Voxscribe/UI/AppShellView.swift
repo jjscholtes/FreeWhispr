@@ -197,14 +197,17 @@ private struct SessionFolderRow: View {
             .foregroundStyle(selected ? DS.ColorToken.fgPrimary : DS.ColorToken.fgSecondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? DS.ColorToken.bgPanel : Color.clear)
             .overlay(
                 RoundedRectangle(cornerRadius: DS.Radius.sm)
                     .stroke(selected ? DS.ColorToken.borderStrong : DS.ColorToken.borderSoft.opacity(0.6), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1101,24 +1104,11 @@ private struct LabeledTextFieldCard: View {
 private struct MoveToFolderMenuButton: View {
     @ObservedObject var viewModel: AppViewModel
     let manifest: SessionManifest
+    @State private var isPresented = false
 
     var body: some View {
-        Menu {
-            Button("Unfiled") {
-                viewModel.moveSession(manifest, toFolderId: nil)
-            }
-            if !viewModel.userFolders.isEmpty {
-                Divider()
-                ForEach(viewModel.userFolders) { folder in
-                    Button(folder.name) {
-                        viewModel.moveSession(manifest, toFolderId: folder.id)
-                    }
-                }
-            }
-            Divider()
-            Button("New Folder…") {
-                viewModel.promptCreateFolder()
-            }
+        Button {
+            isPresented.toggle()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "folder")
@@ -1138,7 +1128,67 @@ private struct MoveToFolderMenuButton: View {
             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
             .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Move to Folder")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.ColorToken.fgPrimary)
+
+                VStack(spacing: 6) {
+                    folderRow(title: "Unfiled", subtitle: "Remove folder assignment") {
+                        viewModel.moveSession(manifest, toFolderId: nil)
+                        isPresented = false
+                    }
+
+                    if !viewModel.userFolders.isEmpty {
+                        Divider()
+                        ForEach(viewModel.userFolders) { folder in
+                            folderRow(title: folder.name, subtitle: "Move session here") {
+                                viewModel.moveSession(manifest, toFolderId: folder.id)
+                                isPresented = false
+                            }
+                        }
+                    }
+
+                    Divider()
+                    folderRow(title: "New Folder…", subtitle: "Create a folder first") {
+                        viewModel.promptCreateFolder()
+                        isPresented = false
+                    }
+                }
+            }
+            .padding(12)
+            .frame(width: 300)
+            .background(DS.ColorToken.bgApp)
+        }
+    }
+
+    @ViewBuilder
+    private func folderRow(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DS.ColorToken.fgPrimary)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(DS.ColorToken.bgPanelAlt)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.sm)
+                    .stroke(DS.ColorToken.borderSoft, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -1,4 +1,4 @@
-# Kopie (macOS Local Transcription Prototype)
+# FreeWhispr (macOS Local Transcription Prototype)
 
 Monochrome macOS transcription tool prototype for recording conversations and producing speaker-labeled transcripts locally.
 

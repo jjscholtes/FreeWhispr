@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_DIR="$ROOT/tmp/icon-build"
-MASTER_PNG="$TMP_DIR/Kopie-1024.png"
-ICONSET_DIR="$TMP_DIR/Kopie.iconset"
-OUT_ICNS="$ROOT/branding/Kopie.icns"
-OUT_PREVIEW_PNG="$ROOT/branding/Kopie-1024.png"
+MASTER_PNG="$TMP_DIR/FreeWhispr-1024.png"
+ICONSET_DIR="$TMP_DIR/FreeWhispr.iconset"
+OUT_ICNS="$ROOT/branding/FreeWhispr.icns"
+OUT_PREVIEW_PNG="$ROOT/branding/FreeWhispr-1024.png"
 
 mkdir -p "$TMP_DIR"
 mkdir -p "$TMP_DIR"/{home,tmp,clang-module-cache,.cache}
@@ -16,7 +16,7 @@ export TMPDIR="$TMP_DIR/tmp/"
 export XDG_CACHE_HOME="$TMP_DIR/.cache"
 export CLANG_MODULE_CACHE_PATH="$TMP_DIR/clang-module-cache"
 
-echo "[1/4] Rendering Kopie icon master PNG"
+echo "[1/4] Rendering FreeWhispr icon master PNG"
 swift "$ROOT/scripts/generate_kopie_icon.swift" --output "$MASTER_PNG"
 cp "$MASTER_PNG" "$OUT_PREVIEW_PNG"
 
