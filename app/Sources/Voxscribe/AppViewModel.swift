@@ -67,6 +67,8 @@ final class AppViewModel: ObservableObject {
     @Published var huggingFaceToken = ""
     @Published var setupStatus: WorkerSetupStatus?
     @Published var processingProgress: ProcessingProgressEvent?
+    @Published var processingStartedAt: Date?
+    @Published var processingLastProgressAt: Date?
     @Published var errorMessage: String?
     @Published var errorTechnicalDetails: String?
     @Published var infoMessage: String?
@@ -419,6 +421,8 @@ final class AppViewModel: ObservableObject {
     func startProcessing(sessionId: UUID, mode: ProcessingRunMode = .full) {
         processingTask?.cancel()
         processingProgress = nil
+        processingStartedAt = nil
+        processingLastProgressAt = nil
         errorMessage = nil
         errorTechnicalDetails = nil
         interimTranscriptShownForSessions.remove(sessionId)
@@ -441,6 +445,8 @@ final class AppViewModel: ObservableObject {
                     $0.lastError = nil
                 }
                 await reloadSessions()
+                processingStartedAt = Date()
+                processingLastProgressAt = Date()
 
                 let output = try await processingCoordinator.runTranscriptionJob(
                     projectRoot: projectRootURL,
@@ -456,6 +462,7 @@ final class AppViewModel: ObservableObject {
                         Task { @MainActor [weak self] in
                             guard let self else { return }
                             self.processingProgress = event
+                            self.processingLastProgressAt = Date()
                             self.applyProcessingProgressLocally(sessionId: sessionId, event: event)
                             await self.persistProcessingProgressIfNeeded(sessionId: sessionId, event: event)
                             if expectsDiarization,
@@ -483,9 +490,13 @@ final class AppViewModel: ObservableObject {
                 selectedSessionID = sessionId
                 currentTranscript = transcript
                 transcriptSaveState = .saved(Date())
+                processingStartedAt = nil
+                processingLastProgressAt = nil
                 stage = .transcript(sessionId)
                 showInfo(mode == .diarizationOnly ? "Speaker separation updated" : "Transcript ready")
             } catch is CancellationError {
+                processingStartedAt = nil
+                processingLastProgressAt = nil
                 showInfo("Processing cancelled.")
             } catch let error as ProcessingCoordinatorError {
                 await markProcessingFailure(sessionId: sessionId, code: error.code, message: error.localizedDescription)
@@ -528,6 +539,8 @@ final class AppViewModel: ObservableObject {
                 errorTechnicalDetails = nil
             }
         }
+        processingStartedAt = nil
+        processingLastProgressAt = nil
         self.stage = (fallbackTranscript != nil && code != "JOB_CANCELLED") ? .transcript(sessionId) : .processing(sessionId)
     }
 
@@ -535,6 +548,8 @@ final class AppViewModel: ObservableObject {
         Task {
             await processingCoordinator.cancelCurrentJob()
         }
+        processingStartedAt = nil
+        processingLastProgressAt = nil
     }
 
     func retryProcessing() {

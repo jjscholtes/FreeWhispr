@@ -587,6 +587,31 @@ private struct ProcessingStageView: View {
                         .foregroundStyle(DS.ColorToken.fgSecondary)
                 }
 
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    HStack(spacing: 12) {
+                        if let elapsed = processingElapsedText {
+                            Text("Elapsed: \(elapsed)")
+                        }
+                        if let lastUpdate = lastUpdateText {
+                            Text("Last update: \(lastUpdate)")
+                        }
+                        Spacer()
+                    }
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DS.ColorToken.fgSecondary)
+                }
+
+                if shouldShowLongRunningHint {
+                    Text(longRunningHintText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .background(DS.ColorToken.bgPanelAlt)
+                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DS.ColorToken.borderSoft, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+                }
+
                 VStack(alignment: .leading, spacing: 10) {
                     StageRow(number: "01", title: "Transcribing", active: currentStage == .transcribing, stateText: stageText(for: .transcribing))
                     StageRow(number: "02", title: "Speaker Split", active: currentStage == .diarizing || currentStage == .reconciling, stateText: stageText(for: .diarizing))
@@ -687,6 +712,40 @@ private struct ProcessingStageView: View {
         case .queued, .running: return "waiting"
         default: return "waiting"
         }
+    }
+
+    private var processingElapsedText: String? {
+        guard let started = viewModel.processingStartedAt else { return nil }
+        let elapsed = max(0, Int(Date().timeIntervalSince(started)))
+        let minutes = elapsed / 60
+        let seconds = elapsed % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private var lastUpdateText: String? {
+        guard let updated = viewModel.processingLastProgressAt else { return nil }
+        let delta = max(0, Int(Date().timeIntervalSince(updated)))
+        if delta < 2 { return "just now" }
+        return "\(delta)s ago"
+    }
+
+    private var currentAudioExtension: String? {
+        guard let manifest else { return nil }
+        let ext = URL(fileURLWithPath: manifest.audioFileRelativePath).pathExtension.lowercased()
+        return ext.isEmpty ? nil : ext
+    }
+
+    private var shouldShowLongRunningHint: Bool {
+        guard currentStage == .transcribing || currentStage == .preparing else { return false }
+        guard let started = viewModel.processingStartedAt else { return false }
+        return Date().timeIntervalSince(started) >= 8
+    }
+
+    private var longRunningHintText: String {
+        if currentAudioExtension == "m4a" || currentAudioExtension == "mp4" {
+            return "Large Apple Recorder/Voice Memos files (\(currentAudioExtension?.uppercased() ?? "M4A")) can stay on one step for a while while audio is decoded and transcribed. FreeWhispr is still working."
+        }
+        return "Long recordings may stay on the same processing step for a while. FreeWhispr is still working."
     }
 }
 
@@ -880,6 +939,15 @@ private struct TranscriptStageView: View {
             }
             if let threads = metadata["threads"] {
                 parts.append("t:\(threads)")
+            }
+            if metadata["coremlRequested"] == "true" {
+                if metadata["coremlUsed"] == "true" {
+                    parts.append("CoreML")
+                } else if metadata["coremlLoadFailed"] == "true" {
+                    parts.append("CoreML failed")
+                } else {
+                    parts.append("CoreML pending")
+                }
             }
             if metadata["gpuFallbackToCpu"] == "true" {
                 parts.append("GPU→CPU fallback")
@@ -1416,7 +1484,9 @@ private struct SettingsView: View {
                                 setupLine("whisper.cpp", status.whisperCppAvailable ? "Available" : "Missing")
                                 setupLine("whisper.cpp binary", status.whisperCppBinaryAvailable ? "Available" : "Missing")
                                 setupLine("whisper.cpp turbo model", status.whisperCppTurboModelAvailable ? "Available" : "Missing")
+                                setupLine("whisper.cpp turbo Core ML encoder", status.whisperCppTurboCoreMLAvailable ? "Available" : "Missing")
                                 setupLine("whisper.cpp large-v3 model", status.whisperCppBestModelAvailable ? "Available" : "Missing")
+                                setupLine("whisper.cpp large-v3 Core ML encoder", status.whisperCppBestCoreMLAvailable ? "Available" : "Missing")
                                 setupLine("Diarization backend", status.pyannoteAvailable ? "Available" : "Missing")
                                 setupLine("HF token", status.diarizationTokenPresent ? "Present" : "Missing")
                                 if !status.missingDependencies.isEmpty {
@@ -1449,7 +1519,7 @@ private struct SettingsView: View {
                         }
                     }
 
-                    HStack(spacing: 10) {
+                    FlowLayout(spacing: 10) {
                         Button("Validate setup") {
                             Task { await viewModel.validateSetup() }
                         }

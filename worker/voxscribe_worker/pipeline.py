@@ -79,6 +79,17 @@ def _whispercpp_model_aliases(asr_model: str) -> list[str]:
     return aliases.get(normalized, [f"ggml-{normalized}.bin"])
 
 
+def _whispercpp_coreml_encoder_path_for_model(model_path: Path) -> Path:
+    base = model_path.with_suffix("")
+    # mirror whisper.cpp's internal suffix stripping for quantized model names (e.g. -q5_0)
+    suffix = base.name.rsplit("-", 1)
+    if len(suffix) == 2:
+        tail = suffix[1]
+        if len(tail) == 4 and tail[0] == "q" and tail[2] == "_":
+            base = base.with_name(suffix[0])
+    return base.with_name(base.name + "-encoder.mlmodelc")
+
+
 def _candidate_whispercpp_model_dirs() -> list[Path]:
     paths: list[Path] = []
     env_dir = (
@@ -128,6 +139,14 @@ def _resolve_whispercpp_model_path(asr_model: str) -> Path | None:
             if candidate.exists():
                 return candidate
     return None
+
+
+def _resolve_whispercpp_coreml_model_path(asr_model: str) -> Path | None:
+    model_path = _resolve_whispercpp_model_path(asr_model)
+    if model_path is None:
+        return None
+    candidate = _whispercpp_coreml_encoder_path_for_model(model_path)
+    return candidate if candidate.exists() else None
 
 
 def _resolve_whispercpp_binary() -> Path | None:
@@ -505,12 +524,16 @@ class ProcessingPipeline:
         whispercpp_binary_ok = False
         whispercpp_fast_model_ok = False
         whispercpp_best_model_ok = False
+        whispercpp_fast_coreml_ok = False
+        whispercpp_best_coreml_ok = False
         pyannote_ok = False
         missing: list[str] = []
         if _resolve_whispercpp_binary() is not None:
             whispercpp_binary_ok = True
             whispercpp_fast_model_ok = _resolve_whispercpp_model_path("turbo") is not None
             whispercpp_best_model_ok = _resolve_whispercpp_model_path("large-v3") is not None
+            whispercpp_fast_coreml_ok = _resolve_whispercpp_coreml_model_path("turbo") is not None
+            whispercpp_best_coreml_ok = _resolve_whispercpp_coreml_model_path("large-v3") is not None
         whispercpp_ok = whispercpp_binary_ok and (whispercpp_fast_model_ok or whispercpp_best_model_ok)
         if _python_module_available("pyannote.audio"):
             pyannote_ok = True
@@ -528,6 +551,8 @@ class ProcessingPipeline:
                 "whisperCppBinaryAvailable": whispercpp_binary_ok,
                 "whisperCppTurboModelAvailable": whispercpp_fast_model_ok,
                 "whisperCppBestModelAvailable": whispercpp_best_model_ok,
+                "whisperCppTurboCoreMLAvailable": whispercpp_fast_coreml_ok,
+                "whisperCppBestCoreMLAvailable": whispercpp_best_coreml_ok,
                 "pyannoteAvailable": pyannote_ok,
             },
             "diarizationTokenPresent": token_present,
@@ -712,6 +737,12 @@ class ProcessingPipeline:
         if not segments:
             raise RuntimeError("WHISPERCPP_PARSE_FAILED")
 
+        combined_logs = "\n".join([run.stdout or "", run.stderr or ""])
+        coreml_sidecar_path = _whispercpp_coreml_encoder_path_for_model(model_path)
+        coreml_requested = coreml_sidecar_path.exists()
+        coreml_used = "Core ML model loaded" in combined_logs
+        coreml_load_failed = ("failed to load Core ML model" in combined_logs) or (coreml_requested and not coreml_used)
+
         backend = BackendInfo(
             name="whisper.cpp",
             model=model_path.name,
@@ -726,6 +757,10 @@ class ProcessingPipeline:
                 "gpuUsed": "true" if used_gpu else "false",
                 "gpuFallbackToCpu": "true" if (requested_gpu and not used_gpu) else "false",
                 "inputExt": audio_path.suffix.lower().lstrip(".") or "unknown",
+                "coremlRequested": "true" if coreml_requested else "false",
+                "coremlUsed": "true" if coreml_used else "false",
+                "coremlLoadFailed": "true" if coreml_load_failed else "false",
+                "coremlEncoderPath": coreml_sidecar_path.name if coreml_requested else "",
             },
         )
         return segments, detected_lang, backend

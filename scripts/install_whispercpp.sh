@@ -10,6 +10,7 @@ COREML=0
 UPDATE_REPO=1
 CLEAN_BUILD=0
 DOWNLOAD_MODEL=""
+GENERATE_COREML_MODEL=""
 JOBS=""
 
 usage() {
@@ -26,6 +27,7 @@ Options:
   --no-metal               Build without Metal support (not recommended on Apple Silicon)
   --coreml                 Enable Core ML support in whisper.cpp build (optional)
   --download-model <name>  Run whisper.cpp's model downloader after build (e.g. large-v3-turbo)
+  --generate-coreml-model <name> Generate Core ML encoder model (e.g. large-v3-turbo, large-v3)
   --jobs <n>               Parallel build jobs (default: auto)
   --help                   Show this help
 
@@ -67,6 +69,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --download-model)
       DOWNLOAD_MODEL="${2:-}"
+      shift 2
+      ;;
+    --generate-coreml-model)
+      GENERATE_COREML_MODEL="${2:-}"
+      COREML=1
       shift 2
       ;;
     --jobs)
@@ -166,11 +173,25 @@ if [[ -n "$DOWNLOAD_MODEL" ]]; then
   fi
 fi
 
+if [[ -n "$GENERATE_COREML_MODEL" ]]; then
+  GENERATOR="$REPO_DIR/models/generate-coreml-model.sh"
+  if [[ -x "$GENERATOR" ]]; then
+    echo "[extra] Generating Core ML encoder model for: $GENERATE_COREML_MODEL"
+    (cd "$REPO_DIR" && ./models/generate-coreml-model.sh "$GENERATE_COREML_MODEL")
+  else
+    echo "Core ML generator not found at $GENERATOR" >&2
+    exit 1
+  fi
+fi
+
 echo
 echo "whisper.cpp build complete"
 echo "Binary:    $WHISPER_BIN"
 echo "Bin dir:   $BIN_DIR"
 echo "Models dir (default): $REPO_DIR/models"
+if [[ -n "$GENERATE_COREML_MODEL" ]]; then
+  echo "Core ML encoder: $REPO_DIR/models/ggml-$GENERATE_COREML_MODEL-encoder.mlmodelc"
+fi
 echo
 echo "For FreeWhispr local testing:"
 echo "  export FREEWHISPR_WHISPERCPP_BIN=\"$WHISPER_BIN\""
