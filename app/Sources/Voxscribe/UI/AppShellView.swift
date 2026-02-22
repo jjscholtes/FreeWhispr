@@ -1324,6 +1324,47 @@ private struct SettingsView: View {
                         }
                     }
 
+                    settingsCard(title: "ASR Tuning (whisper.cpp)", subtitle: "Performance/accuracy presets for Apple Silicon. M4 Pro presets are good starting points.") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Preset", selection: $viewModel.settings.whisperCppTuning.preset) {
+                                ForEach(WhisperCppTuningPreset.allCases) { preset in
+                                    Text(preset.label).tag(preset)
+                                }
+                            }
+                            if viewModel.settings.whisperCppTuning.preset == .custom {
+                                HStack(spacing: 10) {
+                                    LabeledIntField(
+                                        title: "Threads",
+                                        value: Binding(
+                                            get: { viewModel.settings.whisperCppTuning.customThreads },
+                                            set: { viewModel.settings.whisperCppTuning.customThreads = $0 }
+                                        ),
+                                        placeholder: "Auto"
+                                    )
+                                    LabeledIntField(
+                                        title: "Beam",
+                                        value: Binding(
+                                            get: { viewModel.settings.whisperCppTuning.customBeamSize },
+                                            set: { viewModel.settings.whisperCppTuning.customBeamSize = $0 }
+                                        ),
+                                        placeholder: "Auto"
+                                    )
+                                    LabeledIntField(
+                                        title: "Best-of",
+                                        value: Binding(
+                                            get: { viewModel.settings.whisperCppTuning.customBestOf },
+                                            set: { viewModel.settings.whisperCppTuning.customBestOf = $0 }
+                                        ),
+                                        placeholder: "Auto"
+                                    )
+                                }
+                            }
+                            Text("Applied to new jobs and the warm-up button.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(DS.ColorToken.fgSecondary)
+                        }
+                    }
+
                     settingsCard(title: "Model Access", subtitle: "Required for pyannote speaker diarization (stored in macOS Keychain).") {
                         VStack(alignment: .leading, spacing: 10) {
                             SecureField("Hugging Face token (pyannote)", text: $viewModel.huggingFaceToken)
@@ -1356,6 +1397,13 @@ private struct SettingsView: View {
                                         .font(.system(size: 12))
                                         .foregroundStyle(DS.ColorToken.fgSecondary)
                                 }
+                            } else if viewModel.isBusyWarmingUpModels {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                    Text("Warming models…")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                                }
                             } else if let status = viewModel.setupStatus {
                                 HStack(spacing: 8) {
                                     Capsule()
@@ -1373,6 +1421,11 @@ private struct SettingsView: View {
                                 setupLine("HF token", status.diarizationTokenPresent ? "Present" : "Missing")
                                 if !status.missingDependencies.isEmpty {
                                     Text("Missing: \(status.missingDependencies.joined(separator: ", "))")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(DS.ColorToken.fgSecondary)
+                                }
+                                if let warmup = viewModel.lastWarmupStatus {
+                                    Text("Last warm-up: \(warmup.asrOK ? "ASR" : "ASR failed")\(warmup.diarizationOK ? " + DIAR" : "") • \(String(format: "%.1fs", warmup.durationSec))")
                                         .font(.system(size: 12))
                                         .foregroundStyle(DS.ColorToken.fgSecondary)
                                 }
@@ -1401,6 +1454,18 @@ private struct SettingsView: View {
                             Task { await viewModel.validateSetup() }
                         }
                         .dsSecondaryButton()
+                        Button("Warm up models") {
+                            viewModel.warmUpModels()
+                        }
+                        .dsSecondaryButton()
+                        .disabled(viewModel.isBusyWarmingUpModels || viewModel.isBusyValidatingSetup)
+                        if viewModel.setupStatus?.pyannoteAvailable == false {
+                            Button(viewModel.isInstallingDiarizationRuntime ? "Installing Speaker Runtime…" : "Install Speaker Runtime…") {
+                                viewModel.installDiarizationRuntime()
+                            }
+                            .dsSecondaryButton()
+                            .disabled(viewModel.isInstallingDiarizationRuntime)
+                        }
                         Button("Save settings") { viewModel.saveSettings() }
                             .dsProminentButton()
                             .tint(.black)
@@ -1440,6 +1505,42 @@ private struct SettingsView: View {
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(DS.ColorToken.fgPrimary)
+        }
+    }
+}
+
+private struct LabeledIntField: View {
+    let title: String
+    @Binding var value: Int?
+    let placeholder: String
+
+    @State private var textValue: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DS.ColorToken.fgSecondary)
+            TextField(placeholder, text: $textValue)
+                .textFieldStyle(.roundedBorder)
+                .onAppear { syncFromValue() }
+                .onChange(of: value) { _, _ in syncFromValue() }
+                .onChange(of: textValue) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        value = nil
+                    } else if let parsed = Int(trimmed), parsed > 0 {
+                        value = parsed
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func syncFromValue() {
+        let rendered = value.map(String.init) ?? ""
+        if rendered != textValue {
+            textValue = rendered
         }
     }
 }

@@ -85,6 +85,10 @@ actor SessionStore {
         transcriptDirectory(for: sessionId).appendingPathComponent("transcript.json")
     }
 
+    func diarizationRuntimeDirectory() -> URL {
+        baseURL.appendingPathComponent("worker_runtime_diarization", isDirectory: true)
+    }
+
     func createDraftSession(settings: AppSettings) throws -> SessionManifest {
         var manifest = SessionManifest.newDraft(settings: settings)
         manifest.modelConfig.diarizationEnabled = settings.diarizationEnabledByDefault

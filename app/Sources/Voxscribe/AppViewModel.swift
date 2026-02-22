@@ -72,6 +72,9 @@ final class AppViewModel: ObservableObject {
     @Published var infoMessage: String?
     @Published var isShowingSettings = false
     @Published var isBusyValidatingSetup = false
+    @Published var isBusyWarmingUpModels = false
+    @Published var isInstallingDiarizationRuntime = false
+    @Published var lastWarmupStatus: WorkerWarmupStatus?
     @Published var pendingDeleteSession: SessionManifest?
     @Published var pendingRenameSession: SessionManifest?
     @Published var renameSessionDraftTitle = ""
@@ -622,6 +625,53 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func warmUpModels() {
+        guard !isBusyWarmingUpModels else { return }
+        Task { @MainActor in
+            isBusyWarmingUpModels = true
+            defer { isBusyWarmingUpModels = false }
+            do {
+                let status = try await processingCoordinator.warmUpModels(
+                    projectRoot: projectRootURL,
+                    profile: settings.defaultProfile,
+                    includeDiarization: settings.diarizationEnabledByDefault,
+                    diarizationToken: normalizedDiarizationToken,
+                    workerScriptPath: settings.workerScriptPath
+                )
+                lastWarmupStatus = status
+                if status.asrOK {
+                    let parts = [
+                        "Warm-up complete (\(String(format: "%.1fs", status.durationSec)))",
+                        status.diarizationOK ? "ASR + diarization warmed" : "ASR warmed",
+                    ]
+                    showInfo(parts.joined(separator: " · "))
+                } else {
+                    showError("Model warm-up failed.")
+                }
+                await validateSetup()
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    func installDiarizationRuntime() {
+        guard !isInstallingDiarizationRuntime else { return }
+        Task { @MainActor in
+            isInstallingDiarizationRuntime = true
+            defer { isInstallingDiarizationRuntime = false }
+            do {
+                let scriptURL = try resolveDiarizationInstallerScriptURL()
+                let installDir = await sessionStore.diarizationRuntimeDirectory()
+                try await runDiarizationInstaller(scriptURL: scriptURL, installDir: installDir)
+                showInfo("Speaker runtime installed")
+                await validateSetup()
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
     func updateTranscriptSegment(id: String, text: String) {
         guard var transcript = currentTranscript else { return }
         guard let index = transcript.segments.firstIndex(where: { $0.id == id }) else { return }
@@ -1121,6 +1171,59 @@ final class AppViewModel: ObservableObject {
         let seconds = CMTimeGetSeconds(duration)
         guard seconds.isFinite, seconds > 0 else { return nil }
         return Int((seconds * 1000).rounded())
+    }
+
+    private func resolveDiarizationInstallerScriptURL() throws -> URL {
+        if let resourceURL = Bundle.main.resourceURL {
+            let bundled = resourceURL.appendingPathComponent("installers/install_worker_deps.sh")
+            if FileManager.default.fileExists(atPath: bundled.path) {
+                return bundled
+            }
+        }
+        let local = projectRootURL.appendingPathComponent("scripts/install_worker_deps.sh")
+        if FileManager.default.fileExists(atPath: local.path) {
+            return local
+        }
+        throw NSError(domain: "FreeWhispr", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Diarization installer script not found."
+        ])
+    }
+
+    private func runDiarizationInstaller(scriptURL: URL, installDir: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [scriptURL.path, "--venv", installDir.path, "--diarization-only"]
+            process.environment = ProcessInfo.processInfo.environment.merging([
+                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                "PYTHONUNBUFFERED": "1",
+            ]) { _, new in new }
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            process.terminationHandler = { process in
+                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+                let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
+                if process.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    let message = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    continuation.resume(throwing: NSError(
+                        domain: "FreeWhispr",
+                        code: Int(process.terminationStatus),
+                        userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "Diarization runtime install failed." : message]
+                    ))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     private func defaultExportFilenameStem() -> String {

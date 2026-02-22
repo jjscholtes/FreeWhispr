@@ -22,6 +22,7 @@ WHISPERCPP_BIN_PATH="${FREEWHISPR_WHISPERCPP_BIN_PATH:-}"
 WHISPERCPP_MODEL_DIR="${FREEWHISPR_WHISPERCPP_MODEL_DIR:-}"
 SIGN_IDENTITY="${FREEWHISPR_CODESIGN_IDENTITY:-${VOXSCRIBE_CODESIGN_IDENTITY:-}}"
 NOTARY_PROFILE="${FREEWHISPR_NOTARY_PROFILE:-${VOXSCRIBE_NOTARY_PROFILE:-}}"
+OMIT_DIARIZATION_RUNTIME=0
 
 usage() {
   cat <<EOF
@@ -31,6 +32,7 @@ Options:
   --skip-build                 Reuse existing app/.build/<configuration>/$APP_NAME
   --configuration <name>       Swift build configuration (release|debug). Default: $BUILD_CONFIGURATION
   --worker-venv <path>         Copy a prepared Python venv into app bundle Resources/worker_runtime
+  --omit-diarization-runtime   Skip bundling Python diarization runtime (smaller app; install on demand)
   --whispercpp-bin <path>      Copy a built whisper.cpp CLI binary into app bundle Resources/whispercpp
   --whispercpp-model-dir <p>   Optionally copy whisper.cpp models dir into app bundle Resources/whispercpp/models
   --sign-identity <name>       Codesign app bundle with Developer ID identity
@@ -64,6 +66,10 @@ while [[ $# -gt 0 ]]; do
     --worker-venv)
       WORKER_VENV_PATH="${2:-}"
       shift 2
+      ;;
+    --omit-diarization-runtime)
+      OMIT_DIARIZATION_RUNTIME=1
+      shift
       ;;
     --whispercpp-bin)
       WHISPERCPP_BIN_PATH="${2:-}"
@@ -187,7 +193,14 @@ if [[ -f "$RES_DIR/worker/voxscribe_worker.py" ]]; then
   chmod +x "$RES_DIR/worker/voxscribe_worker.py"
 fi
 
-if [[ -n "$WORKER_VENV_PATH" ]]; then
+mkdir -p "$RES_DIR/installers"
+cp "$ROOT/scripts/install_worker_deps.sh" "$RES_DIR/installers/install_worker_deps.sh"
+chmod +x "$RES_DIR/installers/install_worker_deps.sh"
+
+if [[ "$OMIT_DIARIZATION_RUNTIME" -eq 1 ]]; then
+  echo "[4/6] Skipping bundled diarization runtime (--omit-diarization-runtime)"
+  rm -rf "$RES_DIR/worker_runtime"
+elif [[ -n "$WORKER_VENV_PATH" ]]; then
   echo "[4/6] Copying worker runtime from $WORKER_VENV_PATH"
   if [[ ! -d "$WORKER_VENV_PATH" ]]; then
     echo "Worker venv path does not exist: $WORKER_VENV_PATH" >&2

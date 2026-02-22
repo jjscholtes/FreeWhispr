@@ -76,6 +76,7 @@ actor ProcessingCoordinator {
         let workerScriptPath: String
         let pythonExecutablePath: String
         let diarizationToken: String?
+        let whisperCppTuningFingerprint: String?
     }
 
     private final class WorkerSession: @unchecked Sendable {
@@ -143,6 +144,7 @@ actor ProcessingCoordinator {
             payload: [:],
             diarizationToken: diarizationToken,
             workerScriptPath: workerScriptPath,
+            whisperCppTuning: nil,
             onProgress: nil
         )
         guard let payload = response["payload"] as? [String: Any] else { throw ProcessingCoordinatorError.invalidWorkerMessage }
@@ -195,6 +197,7 @@ actor ProcessingCoordinator {
             payload: payload,
             diarizationToken: diarizationToken,
             workerScriptPath: workerScriptPath,
+            whisperCppTuning: settings.whisperCppTuning,
             onProgress: onProgress
         )
         guard let payload = response["payload"] as? [String: Any] else { throw ProcessingCoordinatorError.invalidWorkerMessage }
@@ -229,6 +232,7 @@ actor ProcessingCoordinator {
             ],
             diarizationToken: diarizationToken,
             workerScriptPath: workerScriptPath,
+            whisperCppTuning: nil,
             onProgress: nil
         )
         guard let payload = response["payload"] as? [String: Any] else { throw ProcessingCoordinatorError.invalidWorkerMessage }
@@ -249,6 +253,7 @@ actor ProcessingCoordinator {
         payload: [String: Any],
         diarizationToken: String?,
         workerScriptPath: String?,
+        whisperCppTuning: WhisperCppTuningConfig?,
         onProgress: (@Sendable (ProcessingProgressEvent) -> Void)?
     ) async throws -> [String: Any] {
         await acquireCommandSlot()
@@ -263,7 +268,8 @@ actor ProcessingCoordinator {
             projectRoot: projectRoot,
             workerURL: workerURL,
             pythonExecutable: pythonExecutable,
-            diarizationToken: diarizationToken
+            diarizationToken: diarizationToken,
+            whisperCppTuning: whisperCppTuning
         )
         let process = session.process
 
@@ -390,13 +396,17 @@ actor ProcessingCoordinator {
         projectRoot: URL,
         workerURL: URL,
         pythonExecutable: URL,
-        diarizationToken: String?
+        diarizationToken: String?,
+        whisperCppTuning: WhisperCppTuningConfig?
     ) throws -> WorkerSession {
         let signature = WorkerSessionSignature(
             projectRootPath: projectRoot.path,
             workerScriptPath: workerURL.path,
             pythonExecutablePath: pythonExecutable.path,
-            diarizationToken: diarizationToken?.isEmpty == true ? nil : diarizationToken
+            diarizationToken: diarizationToken?.isEmpty == true ? nil : diarizationToken,
+            whisperCppTuningFingerprint: whisperCppTuning.map {
+                "\($0.preset.rawValue)|\($0.customThreads.map(String.init) ?? "")|\($0.customBeamSize.map(String.init) ?? "")|\($0.customBestOf.map(String.init) ?? "")"
+            }
         )
 
         if let existing = workerSession, existing.process.isRunning, existing.signature == signature {
@@ -409,7 +419,7 @@ actor ProcessingCoordinator {
         process.currentDirectoryURL = projectRoot
         process.executableURL = pythonExecutable
         process.arguments = [workerURL.path]
-        process.environment = configuredEnvironment(diarizationToken: diarizationToken)
+        process.environment = configuredEnvironment(diarizationToken: diarizationToken, whisperCppTuning: whisperCppTuning)
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -487,6 +497,11 @@ actor ProcessingCoordinator {
                 return bundledPython
             }
         }
+        if let installedRuntime = Self.optionalDiarizationRuntimePythonURL(),
+           fm.isExecutableFile(atPath: installedRuntime.path)
+        {
+            return installedRuntime
+        }
         let candidates = [
             projectRoot.appendingPathComponent(".venv313/bin/python3"),
             projectRoot.appendingPathComponent(".venv/bin/python3"),
@@ -500,7 +515,10 @@ actor ProcessingCoordinator {
         return URL(fileURLWithPath: "/usr/bin/python3")
     }
 
-    private func configuredEnvironment(diarizationToken: String?) -> [String: String] {
+    private func configuredEnvironment(
+        diarizationToken: String?,
+        whisperCppTuning: WhisperCppTuningConfig?
+    ) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
         let cacheRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -523,6 +541,9 @@ actor ProcessingCoordinator {
             env["HF_TOKEN"] = diarizationToken
             env["HUGGINGFACE_HUB_TOKEN"] = diarizationToken
         }
+        if let whisperCppTuning {
+            applyWhisperCppTuning(whisperCppTuning, to: &env)
+        }
         let fm = FileManager.default
         if let resourceURL = Bundle.main.resourceURL {
             let bundledWhisperCppBin = resourceURL.appendingPathComponent("whispercpp/whisper-cli")
@@ -535,6 +556,52 @@ actor ProcessingCoordinator {
             }
         }
         return env
+    }
+
+    private func applyWhisperCppTuning(_ tuning: WhisperCppTuningConfig, to env: inout [String: String]) {
+        func set(_ key: String, _ value: Int?) {
+            if let value {
+                env[key] = String(value)
+            } else {
+                env.removeValue(forKey: key)
+            }
+        }
+
+        switch tuning.preset {
+        case .automatic:
+            set("FREEWHISPR_WHISPERCPP_THREADS", nil)
+            set("FREEWHISPR_WHISPERCPP_BEAM_SIZE", nil)
+            set("FREEWHISPR_WHISPERCPP_BEST_OF", nil)
+        case .m4ProFast:
+            set("FREEWHISPR_WHISPERCPP_THREADS", 12)
+            set("FREEWHISPR_WHISPERCPP_BEAM_SIZE", 1)
+            set("FREEWHISPR_WHISPERCPP_BEST_OF", 1)
+        case .m4ProBalanced:
+            set("FREEWHISPR_WHISPERCPP_THREADS", 12)
+            set("FREEWHISPR_WHISPERCPP_BEAM_SIZE", 3)
+            set("FREEWHISPR_WHISPERCPP_BEST_OF", 3)
+        case .m4ProAccuracy:
+            set("FREEWHISPR_WHISPERCPP_THREADS", 10)
+            set("FREEWHISPR_WHISPERCPP_BEAM_SIZE", 5)
+            set("FREEWHISPR_WHISPERCPP_BEST_OF", 5)
+        case .custom:
+            set("FREEWHISPR_WHISPERCPP_THREADS", tuning.customThreads)
+            set("FREEWHISPR_WHISPERCPP_BEAM_SIZE", tuning.customBeamSize)
+            set("FREEWHISPR_WHISPERCPP_BEST_OF", tuning.customBestOf)
+        }
+    }
+
+    static func optionalDiarizationRuntimePythonURL() -> URL? {
+        guard let appSupport = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        return appSupport
+            .appendingPathComponent("com.jesse.voxscribe", isDirectory: true)
+            .appendingPathComponent("worker_runtime_diarization", isDirectory: true)
+            .appendingPathComponent("bin/python3")
     }
 
     static func defaultProjectRoot() -> URL {
