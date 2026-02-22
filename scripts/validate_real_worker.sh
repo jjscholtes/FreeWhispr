@@ -16,7 +16,8 @@ Runs worker setup validation with the real (non-mock) pipeline path. If --audio 
 it also runs a transcription job with mockMode=false and VOXSCRIBE_ALLOW_STUB_PIPELINE=0.
 
 Prerequisites:
-  - faster-whisper + pyannote.audio installed in the chosen Python environment
+  - pyannote.audio installed in the chosen Python environment
+  - whisper.cpp binary + model available (default ASR backend), OR faster-whisper installed as fallback
   - HF_TOKEN or HUGGINGFACE_HUB_TOKEN exported (for diarization)
 
 Examples:
@@ -77,7 +78,7 @@ if [[ "$RUN_JOB" -eq 1 ]]; then
   echo "Running real transcription job (mock disabled)..."
   env VOXSCRIBE_ALLOW_STUB_PIPELINE=0 \
     "$PYTHON_BIN" "$WORKER" <<EOF
-{"type":"request","requestId":"real-job-1","command":"run_transcription_job","payload":{"jobId":"99999999-9999-9999-9999-999999999999","sessionId":"88888888-8888-8888-8888-888888888888","audioPath":"$AUDIO_PATH","outputDir":"$OUT_DIR","languageMode":"auto","profile":"fast","asrModel":"turbo","diarizationEnabled":true,"wordTimestamps":true,"mockMode":false}}
+{"type":"request","requestId":"real-job-1","command":"run_transcription_job","payload":{"jobId":"99999999-9999-9999-9999-999999999999","sessionId":"88888888-8888-8888-8888-888888888888","audioPath":"$AUDIO_PATH","outputDir":"$OUT_DIR","languageMode":"auto","profile":"fast","asrBackend":"whisper.cpp","asrModel":"turbo","diarizationEnabled":true,"wordTimestamps":true,"mockMode":false}}
 EOF
   echo
   echo "Outputs written under: $OUT_DIR"

@@ -124,6 +124,7 @@ class JobRequest:
     outputDir: str
     languageMode: str = "auto"
     profile: str = "fast"
+    asrBackend: str = "whisper.cpp"
     asrModel: str = "turbo"
     diarizationEnabled: bool = True
     speakerHints: dict[str, int] | None = None
@@ -139,6 +140,7 @@ class JobRequest:
             outputDir=str(payload["outputDir"]),
             languageMode=str(payload.get("languageMode", "auto")),
             profile=str(payload.get("profile", "fast")),
+            asrBackend=str(payload.get("asrBackend", "whisper.cpp")),
             asrModel=str(payload.get("asrModel", "turbo")),
             diarizationEnabled=bool(payload.get("diarizationEnabled", True)),
             speakerHints=payload.get("speakerHints"),
@@ -154,4 +156,3 @@ def envelope(message_type: str, request_id: str | None, command: str | None, pay
     if command is not None:
         data["command"] = command
     return data
-

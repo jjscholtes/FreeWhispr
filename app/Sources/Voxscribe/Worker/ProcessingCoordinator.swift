@@ -3,6 +3,7 @@ import Foundation
 struct WorkerSetupStatus: Sendable, Equatable {
     var status: String
     var fasterWhisperAvailable: Bool
+    var whisperCppAvailable: Bool
     var pyannoteAvailable: Bool
     var diarizationTokenPresent: Bool
     var missingDependencies: [String]
@@ -106,6 +107,7 @@ actor ProcessingCoordinator {
         return WorkerSetupStatus(
             status: payload["status"] as? String ?? "unknown",
             fasterWhisperAvailable: dependencies["fasterWhisperAvailable"] as? Bool ?? false,
+            whisperCppAvailable: dependencies["whisperCppAvailable"] as? Bool ?? false,
             pyannoteAvailable: dependencies["pyannoteAvailable"] as? Bool ?? false,
             diarizationTokenPresent: payload["diarizationTokenPresent"] as? Bool ?? false,
             missingDependencies: payload["missingDependencies"] as? [String] ?? []
@@ -129,6 +131,7 @@ actor ProcessingCoordinator {
             "outputDir": outputDir.path,
             "languageMode": manifest.languageMode.rawValue,
             "profile": manifest.profile.rawValue,
+            "asrBackend": manifest.modelConfig.asrBackend.rawValue,
             "asrModel": manifest.modelConfig.asrModel,
             "diarizationEnabled": manifest.modelConfig.diarizationEnabled,
             "wordTimestamps": true,
@@ -357,6 +360,17 @@ actor ProcessingCoordinator {
         if let diarizationToken, !diarizationToken.isEmpty {
             env["HF_TOKEN"] = diarizationToken
             env["HUGGINGFACE_HUB_TOKEN"] = diarizationToken
+        }
+        let fm = FileManager.default
+        if let resourceURL = Bundle.main.resourceURL {
+            let bundledWhisperCppBin = resourceURL.appendingPathComponent("whispercpp/whisper-cli")
+            if fm.isExecutableFile(atPath: bundledWhisperCppBin.path) {
+                env["FREEWHISPR_WHISPERCPP_BIN"] = bundledWhisperCppBin.path
+            }
+            let bundledWhisperCppModels = resourceURL.appendingPathComponent("whispercpp/models", isDirectory: true)
+            if fm.fileExists(atPath: bundledWhisperCppModels.path) {
+                env["FREEWHISPR_WHISPERCPP_MODEL_DIR"] = bundledWhisperCppModels.path
+            }
         }
         return env
     }

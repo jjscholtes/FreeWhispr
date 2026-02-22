@@ -18,6 +18,8 @@ DMG_PATH="$DIST_DIR/${APP_NAME}.dmg"
 DMG_STAGE_DIR="$DIST_DIR/.dmg-stage-${APP_NAME}"
 SKIP_BUILD=0
 WORKER_VENV_PATH="${FREEWHISPR_WORKER_VENV_PATH:-${VOXSCRIBE_WORKER_VENV_PATH:-}}"
+WHISPERCPP_BIN_PATH="${FREEWHISPR_WHISPERCPP_BIN_PATH:-}"
+WHISPERCPP_MODEL_DIR="${FREEWHISPR_WHISPERCPP_MODEL_DIR:-}"
 SIGN_IDENTITY="${FREEWHISPR_CODESIGN_IDENTITY:-${VOXSCRIBE_CODESIGN_IDENTITY:-}}"
 NOTARY_PROFILE="${FREEWHISPR_NOTARY_PROFILE:-${VOXSCRIBE_NOTARY_PROFILE:-}}"
 
@@ -29,6 +31,8 @@ Options:
   --skip-build                 Reuse existing app/.build/<configuration>/$APP_NAME
   --configuration <name>       Swift build configuration (release|debug). Default: $BUILD_CONFIGURATION
   --worker-venv <path>         Copy a prepared Python venv into app bundle Resources/worker_runtime
+  --whispercpp-bin <path>      Copy a built whisper.cpp CLI binary into app bundle Resources/whispercpp
+  --whispercpp-model-dir <p>   Optionally copy whisper.cpp models dir into app bundle Resources/whispercpp/models
   --sign-identity <name>       Codesign app bundle with Developer ID identity
   --notary-profile <profile>   Run xcrun notarytool submit --keychain-profile <profile> and staple
   --bundle-id <id>             Override CFBundleIdentifier (default: $BUNDLE_ID)
@@ -40,6 +44,8 @@ Environment overrides (preferred names):
   FREEWHISPR_CODESIGN_IDENTITY   Default codesign identity
   FREEWHISPR_NOTARY_PROFILE      Default notarytool keychain profile
   FREEWHISPR_WORKER_VENV_PATH    Default path for --worker-venv
+  FREEWHISPR_WHISPERCPP_BIN_PATH Default path for --whispercpp-bin
+  FREEWHISPR_WHISPERCPP_MODEL_DIR Default path for --whispercpp-model-dir
 
 Legacy compatibility env names with VOXSCRIBE_* prefixes are still accepted.
 EOF
@@ -57,6 +63,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --worker-venv)
       WORKER_VENV_PATH="${2:-}"
+      shift 2
+      ;;
+    --whispercpp-bin)
+      WHISPERCPP_BIN_PATH="${2:-}"
+      shift 2
+      ;;
+    --whispercpp-model-dir)
+      WHISPERCPP_MODEL_DIR="${2:-}"
       shift 2
       ;;
     --sign-identity)
@@ -185,6 +199,53 @@ else
   echo "[4/6] No worker venv specified (bundle will use system python or VOXSCRIBE_WORKER_PYTHON override)"
 fi
 
+if [[ -z "$WHISPERCPP_BIN_PATH" ]]; then
+  for candidate in \
+    "$ROOT/vendor/whisper.cpp/build/bin/whisper-cli" \
+    "$ROOT/whisper.cpp/build/bin/whisper-cli" \
+    "$ROOT/vendor/whisper.cpp/build/bin/main" \
+    "$ROOT/whisper.cpp/build/bin/main"
+  do
+    if [[ -x "$candidate" ]]; then
+      WHISPERCPP_BIN_PATH="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -n "$WHISPERCPP_BIN_PATH" ]]; then
+  echo "[4b/6] Copying whisper.cpp runtime from $WHISPERCPP_BIN_PATH"
+  if [[ ! -x "$WHISPERCPP_BIN_PATH" ]]; then
+    echo "whisper.cpp binary is not executable: $WHISPERCPP_BIN_PATH" >&2
+    exit 1
+  fi
+  WHISPERCPP_RES_DIR="$RES_DIR/whispercpp"
+  mkdir -p "$WHISPERCPP_RES_DIR"
+  cp "$WHISPERCPP_BIN_PATH" "$WHISPERCPP_RES_DIR/whisper-cli"
+  chmod +x "$WHISPERCPP_RES_DIR/whisper-cli"
+
+  WHISPERCPP_BIN_DIR="$(cd "$(dirname "$WHISPERCPP_BIN_PATH")" && pwd)"
+  for pattern in "ggml-metal"*".metal" "ggml-metal"*".metallib" "ggml-metal"*; do
+    for sidecar in "$WHISPERCPP_BIN_DIR"/$pattern; do
+      [[ -e "$sidecar" ]] || continue
+      [[ -f "$sidecar" ]] || continue
+      cp "$sidecar" "$WHISPERCPP_RES_DIR/"
+    done
+  done
+
+  if [[ -n "$WHISPERCPP_MODEL_DIR" ]]; then
+    echo "[4c/6] Copying whisper.cpp models from $WHISPERCPP_MODEL_DIR"
+    if [[ ! -d "$WHISPERCPP_MODEL_DIR" ]]; then
+      echo "whisper.cpp model dir does not exist: $WHISPERCPP_MODEL_DIR" >&2
+      exit 1
+    fi
+    rm -rf "$WHISPERCPP_RES_DIR/models"
+    cp -R "$WHISPERCPP_MODEL_DIR" "$WHISPERCPP_RES_DIR/models"
+  fi
+else
+  echo "[4b/6] No whisper.cpp binary specified/found (skipping whisper.cpp runtime bundling)"
+fi
+
 echo "[5/7] Creating distribution zip"
 rm -f "$ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP_PATH"
@@ -227,3 +288,4 @@ echo "Archive:      $ZIP_PATH"
 echo "DMG:          $DMG_PATH"
 echo "Worker entrypoint in bundle: Contents/Resources/worker/<internal worker script>"
 echo "Optional bundled runtime path: Contents/Resources/worker_runtime/bin/python3"
+echo "Optional whisper.cpp runtime path: Contents/Resources/whispercpp/whisper-cli"

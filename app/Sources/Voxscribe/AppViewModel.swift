@@ -104,9 +104,21 @@ final class AppViewModel: ObservableObject {
 
         do {
             settings = try await settingsStore.load()
+            var didMigrateSettings = false
             if settings.enableMockPipeline {
                 // Migrate older dev-first defaults to real inference by default.
                 settings.enableMockPipeline = false
+                didMigrateSettings = true
+            }
+            if settings.schemaVersion < AppSettings.schemaVersion {
+                // Adopt whisper.cpp as the default ASR backend for upgraded installs.
+                if settings.defaultASRBackend != .whisperCpp {
+                    settings.defaultASRBackend = .whisperCpp
+                }
+                settings.schemaVersion = AppSettings.schemaVersion
+                didMigrateSettings = true
+            }
+            if didMigrateSettings {
                 try await settingsStore.save(settings)
             }
         } catch {
@@ -326,6 +338,7 @@ final class AppViewModel: ObservableObject {
                     $0.processingProgress = 0.0
                     $0.durationMs = durationMs
                     $0.lastError = nil
+                    $0.modelConfig.asrBackend = settings.defaultASRBackend
                     $0.modelConfig.asrModel = $0.profile.asrModel
                     $0.modelConfig.diarizationEnabled = settings.diarizationEnabledByDefault
                 }
@@ -377,6 +390,7 @@ final class AppViewModel: ObservableObject {
                     $0.processingProgress = 0.0
                     $0.durationMs = max($0.durationMs, Int(elapsed * 1000))
                     $0.lastError = nil
+                    $0.modelConfig.asrBackend = settings.defaultASRBackend
                     $0.modelConfig.asrModel = $0.profile.asrModel
                     $0.modelConfig.diarizationEnabled = settings.diarizationEnabledByDefault
                 }

@@ -71,9 +71,43 @@ enum ProcessingProfile: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+enum ASRBackend: String, Codable, CaseIterable, Sendable, Identifiable {
+    case whisperCpp = "whisper.cpp"
+    case fasterWhisper = "faster-whisper"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .fasterWhisper: return "faster-whisper"
+        case .whisperCpp: return "whisper.cpp"
+        }
+    }
+}
+
 struct ModelConfigSnapshot: Codable, Sendable, Equatable {
+    var asrBackend: ASRBackend
     var asrModel: String
     var diarizationEnabled: Bool
+
+    init(asrBackend: ASRBackend = .whisperCpp, asrModel: String, diarizationEnabled: Bool) {
+        self.asrBackend = asrBackend
+        self.asrModel = asrModel
+        self.diarizationEnabled = diarizationEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case asrBackend
+        case asrModel
+        case diarizationEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        asrBackend = try container.decodeIfPresent(ASRBackend.self, forKey: .asrBackend) ?? .whisperCpp
+        asrModel = try container.decode(String.self, forKey: .asrModel)
+        diarizationEnabled = try container.decode(Bool.self, forKey: .diarizationEnabled)
+    }
 }
 
 struct SpeakerCountHint: Codable, Sendable, Equatable {
@@ -178,17 +212,18 @@ struct SessionManifest: Codable, Identifiable, Sendable, Equatable {
             durationMs: 0,
             languageMode: settings.defaultLanguageMode,
             profile: settings.defaultProfile,
-            modelConfig: ModelConfigSnapshot(asrModel: settings.defaultProfile.asrModel, diarizationEnabled: true)
+            modelConfig: ModelConfigSnapshot(asrBackend: settings.defaultASRBackend, asrModel: settings.defaultProfile.asrModel, diarizationEnabled: true)
         )
     }
 }
 
 struct AppSettings: Codable, Sendable, Equatable {
-    static let schemaVersion = 2
+    static let schemaVersion = 5
 
     var schemaVersion: Int = AppSettings.schemaVersion
     var defaultLanguageMode: LanguageMode
     var defaultProfile: ProcessingProfile
+    var defaultASRBackend: ASRBackend
     var workerScriptPath: String?
     var enableMockPipeline: Bool
     var diarizationEnabledByDefault: Bool
@@ -198,6 +233,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         schemaVersion: Int = AppSettings.schemaVersion,
         defaultLanguageMode: LanguageMode,
         defaultProfile: ProcessingProfile,
+        defaultASRBackend: ASRBackend,
         workerScriptPath: String?,
         enableMockPipeline: Bool,
         diarizationEnabledByDefault: Bool,
@@ -206,6 +242,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         self.schemaVersion = schemaVersion
         self.defaultLanguageMode = defaultLanguageMode
         self.defaultProfile = defaultProfile
+        self.defaultASRBackend = defaultASRBackend
         self.workerScriptPath = workerScriptPath
         self.enableMockPipeline = enableMockPipeline
         self.diarizationEnabledByDefault = diarizationEnabledByDefault
@@ -216,6 +253,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         case schemaVersion
         case defaultLanguageMode
         case defaultProfile
+        case defaultASRBackend
         case workerScriptPath
         case enableMockPipeline
         case diarizationEnabledByDefault
@@ -227,6 +265,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         defaultLanguageMode = try container.decode(LanguageMode.self, forKey: .defaultLanguageMode)
         defaultProfile = try container.decode(ProcessingProfile.self, forKey: .defaultProfile)
+        defaultASRBackend = try container.decodeIfPresent(ASRBackend.self, forKey: .defaultASRBackend) ?? .whisperCpp
         workerScriptPath = try container.decodeIfPresent(String.self, forKey: .workerScriptPath)
         enableMockPipeline = try container.decodeIfPresent(Bool.self, forKey: .enableMockPipeline) ?? false
         diarizationEnabledByDefault = try container.decodeIfPresent(Bool.self, forKey: .diarizationEnabledByDefault) ?? true
@@ -236,6 +275,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     static let `default` = AppSettings(
         defaultLanguageMode: .auto,
         defaultProfile: .fast,
+        defaultASRBackend: .whisperCpp,
         workerScriptPath: nil,
         enableMockPipeline: false,
         diarizationEnabledByDefault: true,

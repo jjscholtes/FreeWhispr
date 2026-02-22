@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import os
 import random
+import shutil
+import subprocess
 import time
 import wave
 from typing import Callable, Any
@@ -14,6 +17,170 @@ from .exports import write_exports
 
 
 ProgressCallback = Callable[[str, float, str], None]
+
+_WHISPERCPP_SEGMENT_RE = re.compile(
+    r"^\[(?P<start>\d{2}:\d{2}:\d{2}\.\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2}\.\d{3})\]\s*(?P<text>.*)$"
+)
+_WHISPERCPP_LANG_RE = re.compile(r"\blang\s*=\s*([a-z]{2,8})\b", re.IGNORECASE)
+
+
+def _parse_hms_ms(value: str) -> int:
+    hours, minutes, rest = value.split(":")
+    seconds, millis = rest.split(".")
+    return (
+        int(hours) * 3_600_000
+        + int(minutes) * 60_000
+        + int(seconds) * 1_000
+        + int(millis)
+    )
+
+
+def _whispercpp_model_aliases(asr_model: str) -> list[str]:
+    normalized = (asr_model or "").strip().lower()
+    aliases: dict[str, list[str]] = {
+        "turbo": [
+            "ggml-large-v3-turbo.bin",
+            "ggml-large-v3-turbo-q5_0.bin",
+            "ggml-large-v3-turbo-q8_0.bin",
+        ],
+        "large-v3": [
+            "ggml-large-v3.bin",
+            "ggml-large-v3-q5_0.bin",
+            "ggml-large-v3-q8_0.bin",
+        ],
+        "medium": [
+            "ggml-medium.bin",
+            "ggml-medium-q5_0.bin",
+        ],
+        "base": [
+            "ggml-base.bin",
+            "ggml-base-q5_0.bin",
+        ],
+    }
+    if Path(asr_model).exists():
+        return [asr_model]
+    return aliases.get(normalized, [f"ggml-{normalized}.bin"])
+
+
+def _candidate_whispercpp_model_dirs() -> list[Path]:
+    paths: list[Path] = []
+    env_dir = (
+        os.environ.get("FREEWHISPR_WHISPERCPP_MODEL_DIR")
+        or os.environ.get("WHISPERCPP_MODEL_DIR")
+    )
+    env_model = (
+        os.environ.get("FREEWHISPR_WHISPERCPP_MODEL_PATH")
+        or os.environ.get("WHISPERCPP_MODEL_PATH")
+    )
+    if env_model:
+        paths.append(Path(env_model).expanduser())
+    if env_dir:
+        paths.append(Path(env_dir).expanduser())
+    paths.extend(
+        [
+            Path.home() / ".cache" / "whisper.cpp",
+            Path.home() / "Library" / "Application Support" / "FreeWhispr" / "models" / "whisper.cpp",
+            Path.cwd() / "models" / "whisper.cpp",
+            Path.cwd() / "whisper.cpp" / "models",
+            Path.cwd() / "vendor" / "whisper.cpp" / "models",
+        ]
+    )
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _resolve_whispercpp_model_path(asr_model: str) -> Path | None:
+    # Allow passing a direct model path in asrModel (advanced/developer use).
+    direct = Path(asr_model).expanduser()
+    if direct.exists():
+        return direct
+
+    aliases = _whispercpp_model_aliases(asr_model)
+    for directory in _candidate_whispercpp_model_dirs():
+        if directory.is_file():
+            return directory
+        for alias in aliases:
+            candidate = directory / alias
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _resolve_whispercpp_binary() -> Path | None:
+    env_bin = (
+        os.environ.get("FREEWHISPR_WHISPERCPP_BIN")
+        or os.environ.get("WHISPERCPP_BIN")
+    )
+    if env_bin:
+        path = Path(env_bin).expanduser()
+        if path.exists():
+            return path
+
+    candidates: list[Path] = []
+    for name in ("whisper-cli", "whisper-cpp"):
+        resolved = shutil.which(name)
+        if resolved:
+            candidates.append(Path(resolved))
+    # Common local builds during development.
+    candidates.extend(
+        [
+            Path.cwd() / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+            Path.cwd() / "vendor" / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _parse_whispercpp_segments(stdout: str) -> list[TranscriptSegment]:
+    segments: list[TranscriptSegment] = []
+    index = 1
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        match = _WHISPERCPP_SEGMENT_RE.match(line)
+        if not match:
+            continue
+        text = match.group("text").strip()
+        if not text:
+            continue
+        segments.append(
+            TranscriptSegment(
+                id=f"seg_{index}",
+                startMs=_parse_hms_ms(match.group("start")),
+                endMs=_parse_hms_ms(match.group("end")),
+                speakerId=None,
+                text=text,
+                confidence=None,
+                words=None,
+            )
+        )
+        index += 1
+    return segments
+
+
+def _parse_whispercpp_detected_language(stdout: str, stderr: str, fallback: str) -> str:
+    haystack = "\n".join([stdout, stderr])
+    match = _WHISPERCPP_LANG_RE.search(haystack)
+    if match:
+        return match.group(1).lower()
+    return fallback
+
+
+def _looks_like_whispercpp_metal_alloc_error(stderr: str, stdout: str) -> bool:
+    haystack = "\n".join([stderr or "", stdout or ""]).lower()
+    return (
+        "ggml_metal_buffer_init: error" in haystack
+        or ("metal" in haystack and "failed to allocate buffer" in haystack)
+    )
 
 
 def _read_wav_duration_ms(path: Path) -> int | None:
@@ -100,6 +267,9 @@ class ProcessingPipeline:
 
     def validate_setup(self) -> dict[str, Any]:
         faster_whisper_ok = False
+        whispercpp_binary_ok = False
+        whispercpp_fast_model_ok = False
+        whispercpp_best_model_ok = False
         pyannote_ok = False
         missing: list[str] = []
         try:
@@ -107,22 +277,38 @@ class ProcessingPipeline:
 
             faster_whisper_ok = True
         except Exception:
-            missing.append("faster-whisper")
+            pass
+        if _resolve_whispercpp_binary() is not None:
+            whispercpp_binary_ok = True
+            whispercpp_fast_model_ok = _resolve_whispercpp_model_path("turbo") is not None
+            whispercpp_best_model_ok = _resolve_whispercpp_model_path("large-v3") is not None
+        whispercpp_ok = whispercpp_binary_ok and (whispercpp_fast_model_ok or whispercpp_best_model_ok)
         try:
             import pyannote.audio  # type: ignore # noqa: F401
 
             pyannote_ok = True
         except Exception:
             missing.append("pyannote.audio")
+        if not (faster_whisper_ok or whispercpp_ok):
+            if not faster_whisper_ok:
+                missing.append("faster-whisper")
+            if not whispercpp_binary_ok:
+                missing.append("whisper.cpp")
+            elif not (whispercpp_fast_model_ok or whispercpp_best_model_ok):
+                missing.append("whisper.cpp-model")
         token_present = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN"))
         return {
             "pythonVersion": os.sys.version.split()[0],
             "dependencies": {
                 "fasterWhisperAvailable": faster_whisper_ok,
+                "whisperCppAvailable": whispercpp_ok,
+                "whisperCppBinaryAvailable": whispercpp_binary_ok,
+                "whisperCppTurboModelAvailable": whispercpp_fast_model_ok,
+                "whisperCppBestModelAvailable": whispercpp_best_model_ok,
                 "pyannoteAvailable": pyannote_ok,
             },
             "diarizationTokenPresent": token_present,
-            "status": "ready" if faster_whisper_ok else "needs_setup",
+            "status": "ready" if (faster_whisper_ok or whispercpp_ok) else "needs_setup",
             "missingDependencies": missing,
         }
 
@@ -131,6 +317,10 @@ class ProcessingPipeline:
             "profiles": {
                 "fast": {"asrModel": "turbo", "description": "Faster transcription"},
                 "best": {"asrModel": "large-v3", "description": "Higher accuracy, slower"},
+            },
+            "asrBackends": {
+                "whisper.cpp": {"description": "whisper.cpp CLI backend"},
+                "faster-whisper": {"description": "Python faster-whisper backend"},
             },
             "languages": ["auto", "nl", "en"],
             "features": {
@@ -144,6 +334,9 @@ class ProcessingPipeline:
         }
 
     def _real_transcribe(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
+        backend_name = (request.asrBackend or "whisper.cpp").strip().lower()
+        if backend_name in {"whisper.cpp", "whispercpp", "whisper-cpp"}:
+            return self._real_transcribe_whispercpp(request)
         # Optional real backend. Falls back to a structured error if unavailable or unsupported.
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -190,6 +383,84 @@ class ProcessingPipeline:
             )
         detected_lang = getattr(info, "language", None) or language or "unknown"
         backend = BackendInfo(name="faster-whisper", model=model_name)
+        return segments, detected_lang, backend
+
+    def _real_transcribe_whispercpp(self, request: JobRequest) -> tuple[list[TranscriptSegment], str, BackendInfo]:
+        binary = _resolve_whispercpp_binary()
+        if binary is None:
+            raise RuntimeError("MISSING_WHISPERCPP_BINARY")
+
+        model_path = _resolve_whispercpp_model_path(request.asrModel)
+        if model_path is None:
+            raise RuntimeError(f"MISSING_WHISPERCPP_MODEL:{request.asrModel}")
+
+        audio_path = Path(request.audioPath)
+        if not audio_path.exists():
+            raise RuntimeError(f"INPUT_AUDIO_NOT_FOUND:{audio_path}")
+
+        # Initial integration keeps audio requirements strict to avoid hidden conversions.
+        # whisper.cpp is happiest with WAV input; the app's recorder already produces WAV.
+        if audio_path.suffix.lower() != ".wav":
+            raise RuntimeError("WHISPERCPP_WAV_REQUIRED")
+
+        base_cmd = [
+            str(binary),
+            "-m", str(model_path),
+            "-f", str(audio_path),
+        ]
+        if request.languageMode and request.languageMode != "auto":
+            base_cmd.extend(["-l", request.languageMode])
+        # Conservative thread defaults; can be tuned later.
+        cpu_count = os.cpu_count() or 8
+        threads = min(max(cpu_count - 2, 2), 12)
+        base_cmd.extend(["-t", str(threads)])
+
+        force_no_gpu = os.environ.get("FREEWHISPR_WHISPERCPP_NO_GPU", "0") == "1"
+
+        def run_whisper(use_gpu: bool) -> subprocess.CompletedProcess[str]:
+            cmd = list(base_cmd)
+            if not use_gpu:
+                cmd.append("--no-gpu")
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        requested_gpu = not force_no_gpu
+        run = run_whisper(use_gpu=requested_gpu)
+        used_gpu = requested_gpu
+
+        if run.returncode != 0 and requested_gpu and _looks_like_whispercpp_metal_alloc_error(run.stderr, run.stdout):
+            # Automatic fallback for Metal allocation failures on some devices / memory pressure scenarios.
+            run = run_whisper(use_gpu=False)
+            used_gpu = False
+
+        if run.returncode != 0:
+            raise RuntimeError(
+                "WHISPERCPP_EXEC_FAILED:"
+                + (run.stderr.strip() or run.stdout.strip() or f"exit={run.returncode}")
+            )
+
+        segments = _parse_whispercpp_segments(run.stdout)
+        if not segments:
+            raise RuntimeError("WHISPERCPP_PARSE_FAILED")
+
+        fallback_lang = request.languageMode if request.languageMode != "auto" else "unknown"
+        detected_lang = _parse_whispercpp_detected_language(run.stdout, run.stderr, fallback=fallback_lang)
+        backend = BackendInfo(
+            name="whisper.cpp",
+            model=model_path.name,
+            metadata={
+                "binary": binary.name,
+                "threads": str(threads),
+                "wordTimestamps": "false",
+                "gpuRequested": "true" if requested_gpu else "false",
+                "gpuUsed": "true" if used_gpu else "false",
+                "gpuFallbackToCpu": "true" if (requested_gpu and not used_gpu) else "false",
+            },
+        )
         return segments, detected_lang, backend
 
     def _real_diarize(self, request: JobRequest) -> tuple[list[SpeakerTurn], BackendInfo]:
@@ -262,7 +533,7 @@ class ProcessingPipeline:
             segments=segments,
             turns=turns,
             detected_language=detected_language,
-            asr_backend=BackendInfo(name="faster-whisper-mock", model=request.asrModel),
+            asr_backend=BackendInfo(name=f"{request.asrBackend}-mock", model=request.asrModel),
             diar_backend=diar_backend,
         )
         self._check_cancel()
@@ -348,6 +619,37 @@ class ProcessingPipeline:
                 raise WorkerExecutionError("MODEL_NOT_INSTALLED", "faster-whisper dependency is not installed", {"raw": msg})
             if msg.startswith("MISSING_PYANNOTE"):
                 raise WorkerExecutionError("DIARIZATION_MODEL_UNAVAILABLE", "pyannote.audio dependency is not installed", {"raw": msg})
+            if msg == "MISSING_WHISPERCPP_BINARY":
+                raise WorkerExecutionError(
+                    "MODEL_NOT_INSTALLED",
+                    "whisper.cpp binary is not installed or not found in PATH",
+                    {"raw": msg},
+                )
+            if msg.startswith("MISSING_WHISPERCPP_MODEL:"):
+                requested = msg.split(":", 1)[1]
+                raise WorkerExecutionError(
+                    "MODEL_NOT_INSTALLED",
+                    f"whisper.cpp model file for '{requested}' was not found",
+                    {"raw": msg},
+                )
+            if msg == "WHISPERCPP_WAV_REQUIRED":
+                raise WorkerExecutionError(
+                    "UNSUPPORTED_AUDIO_FORMAT",
+                    "whisper.cpp backend currently requires WAV input for FreeWhispr v1 integration",
+                    {"raw": msg},
+                )
+            if msg.startswith("WHISPERCPP_EXEC_FAILED:"):
+                raise WorkerExecutionError(
+                    "TRANSCRIPTION_BACKEND_FAILED",
+                    "whisper.cpp failed while transcribing the audio",
+                    {"raw": msg},
+                )
+            if msg == "WHISPERCPP_PARSE_FAILED":
+                raise WorkerExecutionError(
+                    "UNKNOWN_PROCESSING_ERROR",
+                    "whisper.cpp completed but FreeWhispr could not parse its transcript output",
+                    {"raw": msg},
+                )
             if msg == "DIARIZATION_AUTH_REQUIRED":
                 raise WorkerExecutionError("DIARIZATION_AUTH_REQUIRED", "Hugging Face token is required for diarization")
             raise

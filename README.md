@@ -6,7 +6,7 @@ FreeWhispr is a local macOS transcription app for recording or importing audio, 
 
 - SwiftUI macOS app with local recording + audio import, session shelf, folders, transcript editor, and export flow
 - Python worker sidecar with JSONL IPC for transcription/diarization jobs
-- Real-first local processing path (Whisper via `faster-whisper`, diarization via `pyannote`; mock path only for explicit dev overrides)
+- Real-first local processing path (ASR via `whisper.cpp` by default, optional `faster-whisper` fallback; diarization via `pyannote`; mock path only for explicit dev overrides)
 - Speaker naming/reassignment UI, session rename, move-to-folder, and delete actions
 - Packaging scripts for bundled macOS app (`FreeWhispr.app` / `.zip`)
 - Versioned JSON contract examples and basic tests for session store, exports, reconciliation, and worker IPC
@@ -57,7 +57,7 @@ If Hugging Face prompts for terms/approval, complete that with the **same accoun
 
 You want to see something like:
 
-- `faster-whisper: available`
+- `whisper.cpp: available`
 - `pyannote: available`
 - `HF token: present`
 
@@ -77,6 +77,17 @@ The first run may take longer while models are downloaded/cached locally.
 - Go back to the model page and make sure access was approved/accepted
 - Confirm you used the same Hugging Face account for the token
 - Re-run **Validate setup** and try again
+
+**Error: `whisper.cpp: missing`**
+
+- If you are using the packaged app, reinstall/update FreeWhispr and try **Validate setup** again
+- If you are running from source, run:
+
+```bash
+./scripts/install_whispercpp.sh --download-model large-v3-turbo
+```
+
+- Restart the app and click **Validate setup** again
 
 **Error: `faster-whisper: missing`**
 
@@ -108,6 +119,12 @@ If you are running FreeWhispr from the source repo instead of using the packaged
 ```
 
 This creates a local Python environment (`.venv313`) and installs the worker dependencies (including `faster-whisper` and `pyannote.audio`).
+
+Then install `whisper.cpp` (default ASR backend) and a local model:
+
+```bash
+./scripts/install_whispercpp.sh --download-model large-v3-turbo
+```
 
 Then start the app from source:
 

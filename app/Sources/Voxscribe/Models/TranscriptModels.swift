@@ -5,6 +5,71 @@ struct BackendInfo: Codable, Sendable, Equatable {
     var version: String?
     var model: String?
     var metadata: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case version
+        case model
+        case metadata
+    }
+
+    init(name: String, version: String? = nil, model: String? = nil, metadata: [String: String]? = nil) {
+        self.name = name
+        self.version = version
+        self.model = model
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+
+        if let stringMap = try? container.decodeIfPresent([String: String].self, forKey: .metadata) {
+            metadata = stringMap
+        } else if container.contains(.metadata) {
+            let nested = try container.nestedContainer(keyedBy: DynamicCodingKey.self, forKey: .metadata)
+            var parsed: [String: String] = [:]
+            for key in nested.allKeys {
+                if let value = try? nested.decode(String.self, forKey: key) {
+                    parsed[key.stringValue] = value
+                } else if let value = try? nested.decode(Int.self, forKey: key) {
+                    parsed[key.stringValue] = String(value)
+                } else if let value = try? nested.decode(Double.self, forKey: key) {
+                    parsed[key.stringValue] = String(value)
+                } else if let value = try? nested.decode(Bool.self, forKey: key) {
+                    parsed[key.stringValue] = value ? "true" : "false"
+                }
+            }
+            metadata = parsed.isEmpty ? nil : parsed
+        } else {
+            metadata = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(version, forKey: .version)
+        try container.encodeIfPresent(model, forKey: .model)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
+    }
+}
+
+private struct DynamicCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
 }
 
 struct Speaker: Codable, Identifiable, Sendable, Equatable {
